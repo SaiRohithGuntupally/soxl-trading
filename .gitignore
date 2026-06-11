@@ -1,3 +1,8 @@
 .env
 __pycache__/
 *.pyc
+
+# runtime artifacts (machine-specific, not versioned)
+state.json
+journal.jsonl
+equity.csv

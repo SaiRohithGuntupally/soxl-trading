@@ -1,0 +1,13 @@
+{
+  "underlying": "SOXX",
+  "symbol": "SOXL",
+  "risk_pct": 2.0,
+  "stop_atr": 1.5,
+  "tp_R": 2.0,
+  "ema_len": 20,
+  "atr_len": 14,
+  "max_daily_loss_pct": 10.0,
+  "max_position_pct": 50.0,
+  "feed": "iex",
+  "_guardrail_note": "max_daily_loss_pct is the hard kill switch. The autonomous reviewer must NEVER weaken it above 10.0. Every code/config change is git-committed and revertible."
+}
