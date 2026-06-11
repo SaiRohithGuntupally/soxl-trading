@@ -6,3 +6,6 @@ __pycache__/
 state.json
 journal.jsonl
 equity.csv
+cron.log
+operator.log
+last_review.json
