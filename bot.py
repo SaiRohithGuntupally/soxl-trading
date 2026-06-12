@@ -30,6 +30,7 @@ import sys
 import time
 
 import broker
+import notify
 from position_size import compute
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -158,6 +159,8 @@ def tick(cfg, dry_run=False, log=print) -> dict:
                                 f"<= -{cfg['max_daily_loss_pct']}% (${kill_level:.0f})")
         rec["action"] = "KILL_SWITCH"; rec["note"] = state["halt_reason"]
         save_state(state); journal(rec); log(f"KILL SWITCH: {state['halt_reason']}")
+        notify.send(f"🚨 SOXL KILL SWITCH — {state['halt_reason']}. Flattened SOXL, "
+                    f"halted for the day. Equity ${equity:,.0f}")
         return rec
 
     if state.get("halted"):
@@ -187,6 +190,8 @@ def tick(cfg, dry_run=False, log=print) -> dict:
             broker.close_position(cfg["symbol"], key, sec)
         rec["action"] = "CLOSE_TREND_BREAK"
         log(f"trend gate failed while holding -> close {cfg['symbol']}")
+        notify.send(f"🔴 SOXL closed on trend break (SOXX {u_close:.2f} below "
+                    f"EMA{int(cfg['ema_len'])} {ema_now:.2f}). Today P&L ${pnl:+,.0f}")
 
     elif (not pos) and (not has_open_order(orders, cfg["symbol"])) and long_ok:
         entry = broker.latest_price(cfg["symbol"], key, sec, feed=cfg["feed"])
@@ -232,6 +237,8 @@ def _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log) -> str:
     rec["take_profit"] = round(tp, 2)
     log(f"OPEN: BUY {shares} {cfg['symbol']} stop {stop:.2f} tp {tp:.2f} "
         f"id={res.get('id')}")
+    notify.send(f"🟢 SOXL OPEN — bought {shares} @ ~${entry:.2f} | "
+                f"stop ${stop:.2f} / target ${tp:.2f} (GTC)")
     return "OPEN"
 
 
@@ -287,7 +294,13 @@ def main(argv):
     try:
         tick(cfg, dry_run=args.dry_run)
     except broker.AlpacaError as e:
-        print(f"tick failed: {e}", file=sys.stderr); return 1
+        print(f"tick failed: {e}", file=sys.stderr)
+        notify.send(f"⚠️ SOXL bot tick FAILED: {str(e)[:200]}")
+        return 1
+    except Exception as e:  # any unexpected failure should page, not vanish
+        print(f"tick crashed: {e}", file=sys.stderr)
+        notify.send(f"⚠️ SOXL bot CRASHED: {type(e).__name__}: {str(e)[:200]}")
+        return 1
     return 0
 
 
