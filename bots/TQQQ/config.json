@@ -1,0 +1,13 @@
+{
+  "underlying": "QQQ", "symbol": "TQQQ",
+  "strategy": "meanrev",
+  "rsi_len": 14, "rsi_buy": 30.0, "rsi_sell": 55.0, "regime_ma": 200,
+  "risk_pct": 2.0, "stop_atr": 2.0, "tp_R": 2.0, "atr_len": 14,
+  "max_daily_loss_pct": 10.0, "max_position_pct": 50.0, "portfolio_max_loss_pct": 15.0, "feed": "iex",
+  "chop_filter": false, "adx_min": 25.0,
+  "trailing": false, "chand_atr": 3.0, "trail_tp_R": 8.0,
+  "mkt_confirm": false, "mkt_symbol": "SPY", "mkt_ema": 20,
+  "event_block_days": 1,
+  "event_dates": ["2026-06-17","2026-07-14","2026-07-29","2026-08-12","2026-09-16","2026-10-28","2026-12-09"],
+  "_strategy": "MEAN-REVERSION (not trend). signal=QQQ: buy when QQQ RSI<30 AND QQQ>SMA200 (oversold dip within an uptrend), exit RSI>55 or 2R/stop. execute TQQQ (3x). analyze.py: MAR 0.58-0.70, DD ~2%. Low-correlation to the trend bots (profits in chop). 2% risk, unproven-live."
+}

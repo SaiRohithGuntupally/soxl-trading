@@ -201,6 +201,28 @@ def adx(bars: list[dict], period: int = 14) -> float | None:
     return a
 
 
+def rsi(bars: list[dict], period: int = 14) -> float | None:
+    """Latest Wilder RSI. None if not enough data."""
+    n = len(bars)
+    if n <= period:
+        return None
+    g = [0.0] * n; l = [0.0] * n
+    for i in range(1, n):
+        ch = bars[i]["c"] - bars[i - 1]["c"]
+        g[i] = max(ch, 0.0); l[i] = max(-ch, 0.0)
+    ag = sum(g[1:period + 1]) / period; al = sum(l[1:period + 1]) / period
+    for i in range(period + 1, n):
+        ag = (ag * (period - 1) + g[i]) / period
+        al = (al * (period - 1) + l[i]) / period
+    return 100 - 100 / (1 + (ag / al if al else 999))
+
+
+def sma(bars: list[dict], period: int) -> float | None:
+    if period <= 0 or len(bars) < period:
+        return None
+    return sum(b["c"] for b in bars[-period:]) / period
+
+
 def ema_pair(bars: list[dict], period: int = 20) -> tuple[float, float]:
     """Return (current EMA, prior-bar EMA) to read the slope."""
     closes = [b["c"] for b in bars]

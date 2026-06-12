@@ -55,6 +55,8 @@ DEFAULTS = {
     "underlying": "SOXX", "symbol": "SOXL", "risk_pct": 2.0, "stop_atr": 1.5,
     "tp_R": 2.0, "ema_len": 20, "atr_len": 14, "max_daily_loss_pct": 10.0,
     "max_position_pct": 50.0, "feed": "iex",
+    "strategy": "trend",                 # "trend" or "meanrev"
+    "rsi_len": 14, "rsi_buy": 30.0, "rsi_sell": 55.0, "regime_ma": 200,
     "chop_filter": True, "adx_min": 25.0,
     "trailing": True, "chand_atr": 3.0, "trail_tp_R": 8.0,
     "mkt_confirm": True, "mkt_symbol": "SPY", "mkt_ema": 20,
@@ -205,40 +207,52 @@ def tick(cfg, dry_run=False, log=print) -> dict:
         save_state(state); journal(rec); log("market closed; no trading")
         return rec
 
-    # --- signal from the underlying ---
-    ubars = broker.daily_bars(cfg["underlying"], key, sec, feed=cfg["feed"])
-    ema_now, ema_prev = broker.ema_pair(ubars, int(cfg["ema_len"]))
+    # --- strategy-aware signal from the underlying ---
+    strat = cfg.get("strategy", "trend")
+    sym = cfg["symbol"]; und = cfg["underlying"]
+    ubars = broker.daily_bars(und, key, sec, feed=cfg["feed"])
     u_close = ubars[-1]["c"]
-    trend_intact = u_close > ema_now            # exit condition uses this only
-    rising = ema_now > ema_prev
+    mkt_ok = _mkt_confirm(cfg, key, sec)               # broad-market risk-off filter
+    event_block = _near_event(cfg, today)              # don't enter before known events
+    rec.update({"strategy": strat, "underlying_close": round(u_close, 2),
+                "mkt_ok": mkt_ok, "event_block": event_block})
 
-    # Chop filter: require a real trend (ADX) to ENTER (not to stay).
-    adx_val = broker.adx(ubars, 14) if cfg.get("chop_filter") else None
-    chop_ok = (not cfg.get("chop_filter")) or (adx_val is not None
-                                               and adx_val >= float(cfg["adx_min"]))
-    # Broad-market confirmation: don't go long leveraged semis when SPY is risk-off.
-    mkt_ok = _mkt_confirm(cfg, key, sec)
-    # Event gating: block NEW entries within event_block_days before a known event.
-    event_block = _near_event(cfg, today)
-
-    entry_ok = trend_intact and rising and chop_ok and mkt_ok and not event_block
-    rec.update({"underlying_close": round(u_close, 2),
-                "ema_now": round(ema_now, 2), "ema_prev": round(ema_prev, 2),
-                "adx": round(adx_val, 1) if adx_val is not None else None,
-                "mkt_ok": mkt_ok, "event_block": event_block, "entry_ok": entry_ok})
+    if strat == "meanrev":
+        # Buy oversold dips, but only within an uptrend regime; exit at mean reversion.
+        rsi = broker.rsi(ubars, int(cfg.get("rsi_len", 14)))
+        regime = broker.sma(ubars, int(cfg.get("regime_ma", 200)))
+        regime_ok = (regime is None) or (u_close > regime)
+        entry_ok = (rsi is not None and rsi < float(cfg.get("rsi_buy", 30))
+                    and regime_ok and mkt_ok and not event_block)
+        exit_signal = rsi is not None and rsi > float(cfg.get("rsi_sell", 55))
+        exit_reason = f"RSI {rsi:.0f} > {cfg.get('rsi_sell', 55)}" if rsi is not None else "exit"
+        rec.update({"rsi": round(rsi, 1) if rsi is not None else None,
+                    "regime_ok": regime_ok, "entry_ok": entry_ok, "exit_signal": exit_signal})
+    else:  # trend-follow
+        ema_now, ema_prev = broker.ema_pair(ubars, int(cfg["ema_len"]))
+        trend_intact = u_close > ema_now
+        rising = ema_now > ema_prev
+        adx_val = broker.adx(ubars, 14) if cfg.get("chop_filter") else None
+        chop_ok = (not cfg.get("chop_filter")) or (adx_val is not None
+                                                   and adx_val >= float(cfg["adx_min"]))
+        entry_ok = trend_intact and rising and chop_ok and mkt_ok and not event_block
+        exit_signal = not trend_intact
+        exit_reason = f"{und} {u_close:.2f} below EMA{int(cfg['ema_len'])} {ema_now:.2f}"
+        rec.update({"ema_now": round(ema_now, 2), "ema_prev": round(ema_prev, 2),
+                    "adx": round(adx_val, 1) if adx_val is not None else None,
+                    "entry_ok": entry_ok, "exit_signal": exit_signal})
 
     orders = broker.get_open_orders(key, sec)
 
     # --- decide ---
-    if pos and not trend_intact:
+    if pos and exit_signal:
         if not dry_run:
-            broker.close_position(cfg["symbol"], key, sec)
-            broker.cancel_symbol_orders(cfg["symbol"], key, sec)
+            broker.close_position(sym, key, sec)
+            broker.cancel_symbol_orders(sym, key, sec)
         state["trail_hh"] = None
-        rec["action"] = "CLOSE_TREND_BREAK"
-        log(f"trend gate failed while holding -> close {cfg['symbol']}")
-        notify.send(f"🔴 SOXL closed on trend break (SOXX {u_close:.2f} below "
-                    f"EMA{int(cfg['ema_len'])} {ema_now:.2f}). Today P&L ${pnl:+,.0f}")
+        rec["action"] = "CLOSE_SIGNAL"
+        log(f"exit signal while holding -> close {sym}")
+        notify.send(f"🔴 {sym} closed ({exit_reason}). Today P&L ${pnl:+,.0f}")
 
     elif (not pos) and (not has_open_order(orders, cfg["symbol"])) and entry_ok:
         entry = broker.latest_price(cfg["symbol"], key, sec, feed=cfg["feed"])
@@ -294,8 +308,8 @@ def _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log, state) -> str:
     state["trail_hh"] = entry            # seed trailing high-water mark at entry
     log(f"OPEN: BUY {shares} {cfg['symbol']} stop {stop:.2f} tp {tp:.2f} "
         f"id={res.get('id')}")
-    notify.send(f"🟢 SOXL OPEN — bought {shares} @ ~${entry:.2f} | "
-                f"stop ${stop:.2f} / target ${tp:.2f} (GTC)")
+    notify.send(f"🟢 {cfg['symbol']} OPEN ({cfg.get('strategy','trend')}) — bought "
+                f"{shares} @ ~${entry:.2f} | stop ${stop:.2f} / target ${tp:.2f} (GTC)")
     return "OPEN"
 
 
