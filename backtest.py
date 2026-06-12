@@ -134,7 +134,79 @@ DEFAULTS = dict(
     trail=False, chand_atr=3.0,
     volscale=False, vol_ref=0.11,         # ~11% daily ATR is "normal" for SOXL
     event_block=0, event_dates=frozenset(),
+    shorts=False,                          # long/short: hold SOXS in downtrends
 )
+
+
+def align3(soxx, soxl, soxs):
+    a = {b["date"]: b for b in soxx}
+    b_ = {x["date"]: x for x in soxl}
+    c = {x["date"]: x for x in soxs}
+    dates = sorted(set(a) & set(b_) & set(c))
+    return dates, [a[d] for d in dates], [b_[d] for d in dates], [c[d] for d in dates]
+
+
+def simulate_ls(dates, soxx, soxl, soxs, p):
+    """Long SOXL in confirmed uptrends, long SOXS in confirmed downtrends, flat in
+    chop. Same trailing/stop/sizing machinery, applied to whichever ETF is held."""
+    ema = ema_series([b["c"] for b in soxx], p["ema_len"])
+    adx = adx_series(soxx, 14)
+    bars = {"SOXL": soxl, "SOXS": soxs}
+    atrs = {"SOXL": atr_series(soxl, p["atr_len"]),
+            "SOXS": atr_series(soxs, p["atr_len"])}
+    cash = p["capital"]; pos = None; pending = None
+    eq_curve = []; trades = []; days_in = 0
+
+    for i in range(len(dates)):
+        if pending:
+            if pending[0] == "exit" and pos:
+                o = bars[pos["sym"]][i]["o"]
+                cash += pos["sh"] * o; trades.append(o / pos["entry"] - 1); pos = None
+            elif pending[0] == "entry" and pos is None:
+                _, sym, sh, stop, tp = pending
+                o = bars[sym][i]["o"]; cash -= sh * o
+                pos = {"sym": sym, "sh": sh, "entry": o, "stop": stop, "tp": tp,
+                       "hh": bars[sym][i]["h"], "atr": atrs[sym][i] or 0}
+            pending = None
+
+        if pos:
+            days_in += 1
+            bar = bars[pos["sym"]][i]
+            o, h, l = bar["o"], bar["h"], bar["l"]
+            stop = pos["stop"]
+            if p["trail"] and pos["atr"]:
+                stop = max(stop, pos["hh"] - p["chand_atr"] * pos["atr"])
+            if l <= stop:
+                fill = min(o, stop); cash += pos["sh"] * fill
+                trades.append(fill / pos["entry"] - 1); pos = None
+            elif (not p["trail"]) and h >= pos["tp"]:
+                fill = max(o, pos["tp"]); cash += pos["sh"] * fill
+                trades.append(fill / pos["entry"] - 1); pos = None
+            else:
+                pos["hh"] = max(pos["hh"], h)
+
+        if ema[i] is not None and ema[i - 1] is not None:
+            rising = ema[i] > ema[i - 1]; cx = soxx[i]["c"]
+            adx_ok = (not p["chop"]) or (adx[i] is not None and adx[i] >= p["adx_min"])
+            up = cx > ema[i] and rising and adx_ok
+            down = cx < ema[i] and (not rising) and adx_ok
+            if pos:
+                if pos["sym"] == "SOXL" and not (cx > ema[i]):
+                    pending = ("exit",)
+                elif pos["sym"] == "SOXS" and not (cx < ema[i]):
+                    pending = ("exit",)
+            else:
+                sym = "SOXL" if up else ("SOXS" if (down and p["shorts"]) else None)
+                if sym and atrs[sym][i]:
+                    sd = p["stop_atr"] * atrs[sym][i]
+                    est = bars[sym][i]["c"]
+                    sh = int((cash * p["risk_pct"] / 100) / sd)
+                    if sh >= 1 and sh * est <= cash:
+                        pending = ("entry", sym, sh, est - sd, est + sd * p["tp_R"])
+
+        eq_curve.append(cash + (pos["sh"] * bars[pos["sym"]][i]["c"] if pos else 0))
+
+    return metrics(dates, eq_curve, trades, days_in, p["capital"])
 
 
 def simulate(dates, soxx, soxl, p):
@@ -256,29 +328,36 @@ def main(argv):
     key, sec = broker.load_creds()
     soxx = fetch("SOXX", start, key, sec)
     soxl = fetch("SOXL", start, key, sec)
-    dates, soxx, soxl = align(soxx, soxl)
+    soxs = fetch("SOXS", start, key, sec)
+    dates, soxx, soxl, soxs = align3(soxx, soxl, soxs)
     print(f"Backtest window: {dates[0]} -> {dates[-1]}  ({len(dates)} days)\n")
-
-    # buy & hold SOXL benchmark
     bh = soxl[-1]["c"] / soxl[0]["c"] - 1
 
-    configs = [
-        ("Baseline (current)", cfg()),
-        ("+ Chop filter (ADX>25)", cfg(chop=True)),
-        ("+ Trailing exit (3xATR)", cfg(trail=True)),
-        ("+ Vol-scaled sizing", cfg(volscale=True)),
-        ("Chop + Trail (RECOMMENDED)", cfg(chop=True, trail=True)),
-        ("ALL (chop+trail+vol)", cfg(chop=True, trail=True, volscale=True)),
-    ]
-    hdr = f"{'strategy':28} {'return':>9} {'CAGR':>7} {'maxDD':>7} {'Sharpe':>7} {'trades':>7} {'win%':>6} {'expo':>6}"
-    print(hdr); print("-" * len(hdr))
-    for name, p in configs:
-        m = simulate(dates, soxx, soxl, p)
-        print(f"{name:28} {m['ret']*100:>8.0f}% {m['cagr']*100:>6.0f}% "
+    def row(name, m):
+        print(f"{name:30} {m['ret']*100:>8.0f}% {m['cagr']*100:>6.0f}% "
               f"{m['mdd']*100:>6.0f}% {m['sharpe']:>7.2f} {m['trades']:>7} "
               f"{m['win_rate']*100:>5.0f}% {m['exposure']*100:>5.0f}%")
+
+    hdr = f"{'strategy':30} {'return':>9} {'CAGR':>7} {'maxDD':>7} {'Sharpe':>7} {'trades':>7} {'win%':>6} {'expo':>6}"
+
+    print("== STRATEGY VARIANTS (risk 2%) ==")
+    print(hdr); print("-" * len(hdr))
+    rec = cfg(chop=True, trail=True)
+    row("Long-only (current live)", simulate(dates, soxx, soxl, rec))
+    row("Long/SHORT (add SOXS)", simulate_ls(dates, soxx, soxl, soxs,
+                                             cfg(chop=True, trail=True, shorts=True)))
     print("-" * len(hdr))
-    print(f"{'Buy & hold SOXL':28} {bh*100:>8.0f}%   (reference)")
+    print(f"{'Buy & hold SOXL':30} {bh*100:>8.0f}%   (~90% drawdown)\n")
+
+    print("== RISK-LEVEL SWEEP (the leverage/return/drawdown trade-off) ==")
+    print(hdr); print("-" * len(hdr))
+    for rp in (2, 3, 4, 6):
+        row(f"Long-only  risk {rp}%", simulate(dates, soxx, soxl,
+                                               cfg(chop=True, trail=True, risk_pct=rp)))
+    for rp in (2, 3, 4):
+        row(f"Long/short risk {rp}%", simulate_ls(dates, soxx, soxl, soxs,
+                                                  cfg(chop=True, trail=True, shorts=True, risk_pct=rp)))
+    print("-" * len(hdr))
     return 0
 
 

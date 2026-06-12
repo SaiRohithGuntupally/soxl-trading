@@ -32,7 +32,7 @@ fastest way to destroy the system. A losing day with the rules followed correctl
 - **Never** set `max_daily_loss_pct` above `10.0` (bot also hard-caps this in code).
 - **Never** remove or weaken: the kill switch, the SOXL-only flattening, or the
   "only ever trade SOXL" constraint. The bot must never touch other account positions.
-- **Never** raise `risk_pct` above `2.0`.
+- **Never** raise `risk_pct` above `4.0` (user-chosen ceiling). You may *lower* it in a drawdown, but never exceed 4.0.
 - **Never** commit `.env`, keys, or any secret. (It is gitignored — keep it that way.)
 - **Never** delete `journal.jsonl`/`equity.csv` history.
 - Make at most **one** strategy change per run, and document it in `NOTES.md`.
@@ -42,7 +42,7 @@ fastest way to destroy the system. A losing day with the rules followed correctl
 | knob          | raise it when…                          | lower it when…                       |
 |---------------|-----------------------------------------|--------------------------------------|
 | `stop_atr`    | chopped out by noise (quick reversals)  | losses per stop are too large        |
-| `risk_pct`    | (cap 2.0) — rarely; only if too timid   | kill switch tripping / big drawdowns  |
+| `risk_pct`    | (cap 4.0) — rarely; only if too timid   | kill switch tripping / big drawdowns  |
 | `ema_len`     | too many false entries in chop          | never entering a real trend          |
 | `adx_min`     | still entering chop (whipsaw)           | sitting out too many real trends     |
 | `chand_atr`   | stopped out too early in good trends    | giving back too much profit          |

@@ -1,7 +1,7 @@
 {
   "underlying": "SOXX",
   "symbol": "SOXL",
-  "risk_pct": 2.0,
+  "risk_pct": 4.0,
   "stop_atr": 1.5,
   "tp_R": 2.0,
   "ema_len": 20,
@@ -30,6 +30,6 @@
   ],
 
   "_event_note": "Verified high-impact days (as of 2026-06-12). FOMC decision days: 06-17, 07-29, 09-16, 10-28, 12-09. CPI releases (confirmed): 07-14, 08-12. NVDA earnings (confirmed): 08-26. STILL TO ADD when BLS/NVIDIA confirm them: CPI for Sep/Oct/Nov/Dec 2026, and NVDA Q3 (~mid-Nov 2026). Operator: verify upcoming dates and append; drop past ones.",
-  "_validated": "Backtest 2020-07..2026-06 (backtest.py): chop+trail lifted Sharpe 0.54->0.89, maxDD 26%->15%. Vol-scaled sizing dropped (no effect). event_dates is a forward calendar of high-impact days (FOMC/CPI/NVDA earnings) -> new entries blocked within event_block_days before; keep it current.",
-  "_guardrail_note": "max_daily_loss_pct is the hard kill switch. The autonomous reviewer must NEVER weaken it above 10.0. Validate strategy changes with backtest.py before deploying. Every change is git-committed and revertible."
+  "_validated": "Backtest 2020-07..2026-06 (backtest.py): chop+trail lifted Sharpe 0.54->0.89, maxDD 26%->15%. Vol-scaled sizing dropped (no effect). Long/SHORT (SOXS in downtrends) TESTED and REJECTED (worse: +50% vs +68%, Sharpe 0.65). risk_pct raised 2->4 by user choice for more profit (backtest +163%, maxDD 27%) - pure leverage, Sharpe ~unchanged. event_dates is a forward calendar of FOMC/CPI/NVDA days -> new entries blocked within event_block_days before; keep it current.",
+  "_guardrail_note": "max_daily_loss_pct is the hard kill switch (cap 10.0, never weaken). risk_pct ceiling is 4.0 (user-chosen) - the reviewer may lower it in drawdowns but must NEVER exceed 4.0. Validate strategy changes with backtest.py before deploying. Every change is git-committed and revertible."
 }
