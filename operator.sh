@@ -6,6 +6,11 @@
 cd "$(dirname "$0")" || exit 1
 ts="$(date -u +%FT%TZ)"
 
+# cron runs with a minimal PATH — make sure the claude CLI (~/.local/bin) and the
+# Anthropic key (from ~/.config) are available.
+export PATH="$HOME/.local/bin:$PATH"
+[ -f "$HOME/soxl-trading/.operator-env" ] && . "$HOME/soxl-trading/.operator-env"
+
 git pull --rebase --quiet origin main 2>/dev/null || true   # latest strategy
 python3 bot.py        >> cron.log 2>&1 || true              # one trading tick
 python3 review.py --json > last_review.json 2>> cron.log || true
