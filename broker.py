@@ -120,7 +120,9 @@ def submit_bracket(symbol, qty, entry_stop, take_profit, key, sec, side="buy"):
         "qty": str(qty),
         "side": side,
         "type": "market",
-        "time_in_force": "day",
+        # GTC so the protective stop/TP legs survive overnight. With "day" they
+        # are canceled at market close, leaving a multi-day position unprotected.
+        "time_in_force": "gtc",
         "order_class": "bracket",
         "take_profit": {"limit_price": round(take_profit, 2)},
         "stop_loss": {"stop_price": round(entry_stop, 2)},
