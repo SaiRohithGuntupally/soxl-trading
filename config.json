@@ -18,8 +18,18 @@
   "trail_tp_R": 8.0,
 
   "event_block_days": 1,
-  "event_dates": [],
+  "event_dates": [
+    "2026-06-17",
+    "2026-07-14",
+    "2026-07-29",
+    "2026-08-12",
+    "2026-08-26",
+    "2026-09-16",
+    "2026-10-28",
+    "2026-12-09"
+  ],
 
+  "_event_note": "Verified high-impact days (as of 2026-06-12). FOMC decision days: 06-17, 07-29, 09-16, 10-28, 12-09. CPI releases (confirmed): 07-14, 08-12. NVDA earnings (confirmed): 08-26. STILL TO ADD when BLS/NVIDIA confirm them: CPI for Sep/Oct/Nov/Dec 2026, and NVDA Q3 (~mid-Nov 2026). Operator: verify upcoming dates and append; drop past ones.",
   "_validated": "Backtest 2020-07..2026-06 (backtest.py): chop+trail lifted Sharpe 0.54->0.89, maxDD 26%->15%. Vol-scaled sizing dropped (no effect). event_dates is a forward calendar of high-impact days (FOMC/CPI/NVDA earnings) -> new entries blocked within event_block_days before; keep it current.",
   "_guardrail_note": "max_daily_loss_pct is the hard kill switch. The autonomous reviewer must NEVER weaken it above 10.0. Validate strategy changes with backtest.py before deploying. Every change is git-committed and revertible."
 }
