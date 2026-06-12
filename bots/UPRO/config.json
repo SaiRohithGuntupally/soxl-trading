@@ -1,0 +1,11 @@
+{
+  "underlying": "SPY", "symbol": "UPRO",
+  "risk_pct": 2.0, "stop_atr": 1.5, "tp_R": 2.0, "ema_len": 20, "atr_len": 14,
+  "max_daily_loss_pct": 10.0, "max_position_pct": 50.0, "portfolio_max_loss_pct": 15.0, "feed": "iex",
+  "chop_filter": true, "adx_min": 25.0,
+  "trailing": true, "chand_atr": 3.0, "trail_tp_R": 8.0,
+  "mkt_confirm": false, "mkt_symbol": "SPY", "mkt_ema": 20,
+  "event_block_days": 1,
+  "event_dates": ["2026-06-17","2026-07-14","2026-07-29","2026-08-12","2026-09-16","2026-10-28","2026-12-09"],
+  "_strategy": "trend-follow, signal=SPY; execute UPRO (3x SPY). mkt_confirm off = redundant with SPY signal. analyze.py: DD 64%->13%. 2% risk, unproven-live."
+}

@@ -46,6 +46,7 @@ EQUITY_CSV = os.path.join(HERE, "equity.csv")
 def set_paths(config_path):
     global STATE_PATH, JOURNAL_PATH, EQUITY_CSV
     d = os.path.dirname(os.path.abspath(config_path))
+    os.makedirs(d, exist_ok=True)          # ensure the bot's runtime dir exists
     STATE_PATH = os.path.join(d, "state.json")
     JOURNAL_PATH = os.path.join(d, "journal.jsonl")
     EQUITY_CSV = os.path.join(d, "equity.csv")
