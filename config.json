@@ -8,6 +8,7 @@
   "atr_len": 14,
   "max_daily_loss_pct": 10.0,
   "max_position_pct": 50.0,
+  "portfolio_max_loss_pct": 15.0,
   "feed": "iex",
 
   "chop_filter": true,

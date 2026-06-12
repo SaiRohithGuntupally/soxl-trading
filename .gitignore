@@ -11,3 +11,5 @@ operator.log
 last_review.json
 .operator-env
 notify.log
+portfolio.json
+portfolio.json.tmp

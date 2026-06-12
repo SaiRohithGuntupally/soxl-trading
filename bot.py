@@ -31,13 +31,24 @@ import time
 
 import broker
 import notify
+import portfolio
 from position_size import compute
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
+# Runtime files live next to the active config, so each bot (root SOXL, or any
+# bots/<TICKER>/config.json) is fully isolated. set_paths() points them at the dir.
 STATE_PATH = os.path.join(HERE, "state.json")
 JOURNAL_PATH = os.path.join(HERE, "journal.jsonl")
 EQUITY_CSV = os.path.join(HERE, "equity.csv")
+
+
+def set_paths(config_path):
+    global STATE_PATH, JOURNAL_PATH, EQUITY_CSV
+    d = os.path.dirname(os.path.abspath(config_path))
+    STATE_PATH = os.path.join(d, "state.json")
+    JOURNAL_PATH = os.path.join(d, "journal.jsonl")
+    EQUITY_CSV = os.path.join(d, "equity.csv")
 
 DEFAULTS = {
     "underlying": "SOXX", "symbol": "SOXL", "risk_pct": 2.0, "stop_atr": 1.5,
@@ -47,14 +58,16 @@ DEFAULTS = {
     "trailing": True, "chand_atr": 3.0, "trail_tp_R": 8.0,
     "mkt_confirm": True, "mkt_symbol": "SPY", "mkt_ema": 20,
     "event_block_days": 1, "event_dates": [],
+    "portfolio_max_loss_pct": 15.0,   # combined daily loss across all bots -> halt all
 }
 HARD_KILL_CEILING = 10.0  # reviewer may not set max_daily_loss_pct above this
 
 
-def load_config() -> dict:
+def load_config(path=None) -> dict:
     cfg = dict(DEFAULTS)
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH) as fh:
+    path = path or CONFIG_PATH
+    if os.path.exists(path):
+        with open(path) as fh:
             cfg.update({k: v for k, v in json.load(fh).items()
                         if not k.startswith("_")})
     # Enforce the kill-switch ceiling no matter what config says.
@@ -150,22 +163,34 @@ def tick(cfg, dry_run=False, log=print) -> dict:
         rec["soxl_market_value"] = round(mv, 2)
         rec["unrealized_intraday_pl"] = float(pos.get("unrealized_intraday_pl", 0))
 
+    # --- PORTFOLIO circuit breaker: record this bot's P&L to the shared ledger,
+    # then check the COMBINED daily loss across all bots. ---
+    portfolio.record(cfg["symbol"], today, pnl, day_start)
+    port_breach, port_total, port_base = portfolio.breached(
+        today, float(cfg.get("portfolio_max_loss_pct", 0)))
+    rec["portfolio_pnl"] = round(port_total, 2)
+
     # --- HARD KILL SWITCH (non-negotiable) ---
-    # Trips on the bot's OWN SOXL loss only, and flattens ONLY SOXL — never the
-    # rest of the account.
+    # Trips on the bot's OWN symbol loss, OR a portfolio-wide breach. Flattens ONLY
+    # this bot's symbol — never the rest of the account.
     kill_level = -float(cfg["max_daily_loss_pct"]) / 100.0 * day_start
-    if pnl <= kill_level:
+    if pnl <= kill_level or port_breach:
         if not dry_run and pos:
             try:
                 broker.close_position(cfg["symbol"], key, sec)
             except broker.AlpacaError as e:
                 rec["flatten_error"] = str(e)
+        sym = cfg["symbol"]
         state["halted"] = True
-        state["halt_reason"] = (f"SOXL daily P&L ${pnl:.0f} "
-                                f"<= -{cfg['max_daily_loss_pct']}% (${kill_level:.0f})")
+        if port_breach:
+            state["halt_reason"] = (f"PORTFOLIO breaker: combined P&L ${port_total:.0f} "
+                                    f"<= -{cfg.get('portfolio_max_loss_pct')}% (${port_base:.0f} base)")
+        else:
+            state["halt_reason"] = (f"{sym} daily P&L ${pnl:.0f} "
+                                    f"<= -{cfg['max_daily_loss_pct']}% (${kill_level:.0f})")
         rec["action"] = "KILL_SWITCH"; rec["note"] = state["halt_reason"]
         save_state(state); journal(rec); log(f"KILL SWITCH: {state['halt_reason']}")
-        notify.send(f"🚨 SOXL KILL SWITCH — {state['halt_reason']}. Flattened SOXL, "
+        notify.send(f"🚨 {sym} KILL SWITCH — {state['halt_reason']}. Flattened {sym}, "
                     f"halted for the day. Equity ${equity:,.0f}")
         return rec
 
@@ -349,14 +374,17 @@ def cmd_status(cfg):
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description="SOXL continuous paper bot")
+    ap = argparse.ArgumentParser(description="continuous paper trading bot")
+    ap.add_argument("--config", help="path to a bot config.json (default: root config.json)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--loop", type=int, metavar="SECONDS",
                     help="tick repeatedly every N seconds (local runtime)")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--flatten", action="store_true")
     args = ap.parse_args(argv)
-    cfg = load_config()
+    if args.config:
+        set_paths(args.config)             # isolate runtime files next to the config
+    cfg = load_config(args.config)
 
     if args.status:
         cmd_status(cfg); return 0
@@ -380,15 +408,16 @@ def main(argv):
                 print(f"tick error (continuing): {e}", file=sys.stderr)
             time.sleep(args.loop)
 
+    sym = cfg.get("symbol", "?")
     try:
         tick(cfg, dry_run=args.dry_run)
     except broker.AlpacaError as e:
         print(f"tick failed: {e}", file=sys.stderr)
-        notify.send(f"⚠️ SOXL bot tick FAILED: {str(e)[:200]}")
+        notify.send(f"⚠️ {sym} bot tick FAILED: {str(e)[:200]}")
         return 1
     except Exception as e:  # any unexpected failure should page, not vanish
         print(f"tick crashed: {e}", file=sys.stderr)
-        notify.send(f"⚠️ SOXL bot CRASHED: {type(e).__name__}: {str(e)[:200]}")
+        notify.send(f"⚠️ {sym} bot CRASHED: {type(e).__name__}: {str(e)[:200]}")
         return 1
     return 0
 
