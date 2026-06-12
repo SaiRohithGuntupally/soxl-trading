@@ -44,7 +44,27 @@ fastest way to destroy the system. A losing day with the rules followed correctl
 | `stop_atr`    | chopped out by noise (quick reversals)  | losses per stop are too large        |
 | `risk_pct`    | (cap 2.0) — rarely; only if too timid   | kill switch tripping / big drawdowns  |
 | `ema_len`     | too many false entries in chop          | never entering a real trend          |
-| `tp_R`        | trends run further than you capture     | wins keep reversing before target    |
+| `adx_min`     | still entering chop (whipsaw)           | sitting out too many real trends     |
+| `chand_atr`   | stopped out too early in good trends    | giving back too much profit          |
+
+## Validate with the backtest — do NOT tune blind
+
+`backtest.py` replays the strategy on ~6 years of real SOXL/SOXX bars (P&L on actual
+SOXL bars, so decay is real). **Before changing any parameter, run `python3 backtest.py`,
+then change config.json and run it again — only keep the change if it improves
+risk-adjusted return (Sharpe / max-drawdown), not just one cherry-picked number.**
+Put the before/after numbers in your NOTES.md entry and commit message. A change that
+doesn't beat the baseline in the backtest is curve-fitting — revert it.
+
+Validated baseline (2020-07..2026-06): chop_filter + trailing lifted Sharpe 0.54→0.89,
+maxDD 26%→15%. Vol-scaled sizing was tested and dropped (no effect). Keep these on.
+
+## Maintain the event calendar (good use of your judgment)
+
+`config.json` `event_dates` blocks new entries within `event_block_days` before known
+high-impact events. **Keep it current:** add upcoming FOMC decision dates, CPI release
+dates, and NVDA/Broadcom earnings dates (drop past ones). This is the right way to use
+news — a forward calendar of *scheduled* events — NOT reacting to headlines.
 
 Logic changes (new filters, regime detection) are allowed under full autonomy, but
 hold a high bar: only when parameter tuning cannot address a *repeating, evidenced*

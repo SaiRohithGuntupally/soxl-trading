@@ -110,6 +110,30 @@ def close_position(symbol, key, sec):
     return api("DELETE", TRADE_HOST, f"/v2/positions/{symbol}", key, sec)
 
 
+def replace_order(order_id, key, sec, **fields):
+    """PATCH an existing order (e.g. ratchet a stop_price up)."""
+    return api("PATCH", TRADE_HOST, f"/v2/orders/{order_id}", key, sec, body=fields)
+
+
+def cancel_symbol_orders(symbol, key, sec):
+    """Cancel all open orders for a symbol (orphaned bracket legs after a close)."""
+    for o in get_open_orders(key, sec):
+        if o.get("symbol") == symbol:
+            try:
+                api("DELETE", TRADE_HOST, f"/v2/orders/{o['id']}", key, sec)
+            except AlpacaError:
+                pass
+
+
+def open_stop_order(symbol, key, sec):
+    """The resting protective stop (bracket leg) for a symbol, if any."""
+    for o in get_open_orders(key, sec):
+        if (o.get("symbol") == symbol and o.get("side") == "sell"
+                and (o.get("type") or "").startswith("stop")):
+            return o
+    return None
+
+
 def close_all(key, sec):
     return api("DELETE", TRADE_HOST, "/v2/positions?cancel_orders=true", key, sec)
 
@@ -143,6 +167,38 @@ def atr(bars: list[dict], period: int = 14) -> float:
     if len(trs) < period:
         raise AlpacaError(f"need >= {period} bars for ATR, got {len(trs)}")
     return sum(trs[-period:]) / period
+
+
+def adx(bars: list[dict], period: int = 14) -> float | None:
+    """Latest Wilder ADX (trend-strength). None if not enough data."""
+    n = len(bars)
+    if n <= 2 * period:
+        return None
+    tr = [0.0] * n; pdm = [0.0] * n; ndm = [0.0] * n
+    for i in range(1, n):
+        up = bars[i]["h"] - bars[i - 1]["h"]
+        dn = bars[i - 1]["l"] - bars[i]["l"]
+        pdm[i] = up if (up > dn and up > 0) else 0.0
+        ndm[i] = dn if (dn > up and dn > 0) else 0.0
+        pc = bars[i - 1]["c"]
+        tr[i] = max(bars[i]["h"] - bars[i]["l"], abs(bars[i]["h"] - pc),
+                    abs(bars[i]["l"] - pc))
+    str_ = sum(tr[1:period + 1]); spdm = sum(pdm[1:period + 1]); sndm = sum(ndm[1:period + 1])
+    dxs = []
+    for i in range(period + 1, n):
+        str_ = str_ - str_ / period + tr[i]
+        spdm = spdm - spdm / period + pdm[i]
+        sndm = sndm - sndm / period + ndm[i]
+        pdi = 100 * spdm / str_ if str_ else 0
+        ndi = 100 * sndm / str_ if str_ else 0
+        dx = 100 * abs(pdi - ndi) / (pdi + ndi) if (pdi + ndi) else 0
+        dxs.append(dx)
+    if len(dxs) < period:
+        return None
+    a = sum(dxs[:period]) / period
+    for j in range(period, len(dxs)):
+        a = (a * (period - 1) + dxs[j]) / period
+    return a
 
 
 def ema_pair(bars: list[dict], period: int = 20) -> tuple[float, float]:

@@ -43,6 +43,9 @@ DEFAULTS = {
     "underlying": "SOXX", "symbol": "SOXL", "risk_pct": 2.0, "stop_atr": 1.5,
     "tp_R": 2.0, "ema_len": 20, "atr_len": 14, "max_daily_loss_pct": 10.0,
     "max_position_pct": 50.0, "feed": "iex",
+    "chop_filter": True, "adx_min": 25.0,
+    "trailing": True, "chand_atr": 3.0, "trail_tp_R": 8.0,
+    "event_block_days": 1, "event_dates": [],
 }
 HARD_KILL_CEILING = 10.0  # reviewer may not set max_daily_loss_pct above this
 
@@ -121,8 +124,10 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     if state.get("date") != today:
         # New day: baseline equity (the bot's "allocated capital" denominator) and
         # the SOXL position value we carried in, so P&L is measured from here.
+        # Preserve trail_hh (highest-high since entry) across days while holding.
         state = {"date": today, "day_start_equity": equity,
-                 "soxl_day_start_value": mv, "halted": False, "halt_reason": None}
+                 "soxl_day_start_value": mv, "halted": False, "halt_reason": None,
+                 "trail_hh": state.get("trail_hh") if pos else None}
 
     day_start = float(state["day_start_equity"])
     soxl_start_val = float(state.get("soxl_day_start_value", 0.0))
@@ -177,23 +182,36 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     ubars = broker.daily_bars(cfg["underlying"], key, sec, feed=cfg["feed"])
     ema_now, ema_prev = broker.ema_pair(ubars, int(cfg["ema_len"]))
     u_close = ubars[-1]["c"]
-    long_ok = (u_close > ema_now) and (ema_now > ema_prev)
+    trend_intact = u_close > ema_now            # exit condition uses this only
+    rising = ema_now > ema_prev
+
+    # Chop filter: require a real trend (ADX) to ENTER (not to stay).
+    adx_val = broker.adx(ubars, 14) if cfg.get("chop_filter") else None
+    chop_ok = (not cfg.get("chop_filter")) or (adx_val is not None
+                                               and adx_val >= float(cfg["adx_min"]))
+    # Event gating: block NEW entries within event_block_days before a known event.
+    event_block = _near_event(cfg, today)
+
+    entry_ok = trend_intact and rising and chop_ok and not event_block
     rec.update({"underlying_close": round(u_close, 2),
                 "ema_now": round(ema_now, 2), "ema_prev": round(ema_prev, 2),
-                "long_ok": long_ok})
+                "adx": round(adx_val, 1) if adx_val is not None else None,
+                "event_block": event_block, "entry_ok": entry_ok})
 
     orders = broker.get_open_orders(key, sec)
 
     # --- decide ---
-    if pos and not long_ok:
+    if pos and not trend_intact:
         if not dry_run:
             broker.close_position(cfg["symbol"], key, sec)
+            broker.cancel_symbol_orders(cfg["symbol"], key, sec)
+        state["trail_hh"] = None
         rec["action"] = "CLOSE_TREND_BREAK"
         log(f"trend gate failed while holding -> close {cfg['symbol']}")
         notify.send(f"🔴 SOXL closed on trend break (SOXX {u_close:.2f} below "
                     f"EMA{int(cfg['ema_len'])} {ema_now:.2f}). Today P&L ${pnl:+,.0f}")
 
-    elif (not pos) and (not has_open_order(orders, cfg["symbol"])) and long_ok:
+    elif (not pos) and (not has_open_order(orders, cfg["symbol"])) and entry_ok:
         entry = broker.latest_price(cfg["symbol"], key, sec, feed=cfg["feed"])
         sbars = broker.daily_bars(cfg["symbol"], key, sec, feed=cfg["feed"])
         a = broker.atr(sbars, int(cfg["atr_len"]))
@@ -214,20 +232,29 @@ def tick(cfg, dry_run=False, log=print) -> dict:
                 rec["action"] = "SKIP_NO_BUYING_POWER"
                 log("not enough buying power; skip")
             else:
-                rec["action"] = _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log)
+                rec["action"] = _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log, state)
         else:
-            rec["action"] = _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log)
+            rec["action"] = _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log, state)
+    elif pos:
+        # Holding with the trend intact -> ratchet the trailing stop up.
+        if cfg.get("trailing") and not dry_run:
+            _manage_trailing(cfg, pos, key, sec, rec, log, state)
+        rec["action"] = "HOLD"
+        log(f"hold ({cfg['symbol']})")
     else:
-        rec["action"] = "HOLD" if pos else "FLAT_NO_SIGNAL"
+        rec["action"] = "FLAT_NO_SIGNAL"
         log(f"no action ({rec['action']})")
 
     save_state(state); journal(rec)
     return rec
 
 
-def _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log) -> str:
+def _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log, state) -> str:
     stop = plan["stop_price"]
-    tp = entry + (entry - stop) * float(cfg["tp_R"])
+    # When trailing, set the bracket TP far out so the trailing stop (not a fixed
+    # target) governs the exit — matches the backtested "let winners run" rule.
+    tp_mult = float(cfg["trail_tp_R"]) if cfg.get("trailing") else float(cfg["tp_R"])
+    tp = entry + (entry - stop) * tp_mult
     if dry_run:
         log(f"[DRY] would BUY {shares} {cfg['symbol']} stop {stop:.2f} tp {tp:.2f}")
         rec["take_profit"] = round(tp, 2)
@@ -235,11 +262,57 @@ def _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log) -> str:
     res = broker.submit_bracket(cfg["symbol"], shares, stop, tp, key, sec)
     rec["order_id"] = res.get("id")
     rec["take_profit"] = round(tp, 2)
+    state["trail_hh"] = entry            # seed trailing high-water mark at entry
     log(f"OPEN: BUY {shares} {cfg['symbol']} stop {stop:.2f} tp {tp:.2f} "
         f"id={res.get('id')}")
     notify.send(f"🟢 SOXL OPEN — bought {shares} @ ~${entry:.2f} | "
                 f"stop ${stop:.2f} / target ${tp:.2f} (GTC)")
     return "OPEN"
+
+
+def _near_event(cfg, today: str) -> bool:
+    """True if `today` is within event_block_days BEFORE any configured event."""
+    dates = cfg.get("event_dates") or []
+    block = int(cfg.get("event_block_days", 0))
+    if not dates or block <= 0:
+        return False
+    import datetime as _dt
+    try:
+        t = _dt.date.fromisoformat(today)
+    except ValueError:
+        return False
+    for d in dates:
+        try:
+            ed = _dt.date.fromisoformat(d)
+        except (ValueError, TypeError):
+            continue
+        if 0 <= (ed - t).days <= block:
+            return True
+    return False
+
+
+def _manage_trailing(cfg, pos, key, sec, rec, log, state):
+    """Ratchet the protective stop up toward a chandelier level (never down).
+    Best-effort: trailing must never crash a tick."""
+    try:
+        atr_now = broker.atr(broker.daily_bars(cfg["symbol"], key, sec,
+                                               feed=cfg["feed"]), int(cfg["atr_len"]))
+        price = float(pos.get("current_price") or pos.get("avg_entry_price"))
+        hh = max(float(state.get("trail_hh") or pos["avg_entry_price"]), price)
+        state["trail_hh"] = hh
+        chandelier = hh - float(cfg["chand_atr"]) * atr_now
+        so = broker.open_stop_order(cfg["symbol"], key, sec)
+        if not so:
+            return
+        cur_stop = float(so.get("stop_price") or 0)
+        rec["trail_hh"] = round(hh, 2)
+        rec["chandelier"] = round(chandelier, 2)
+        if chandelier > cur_stop + 0.01:        # only ever move the stop UP
+            broker.replace_order(so["id"], key, sec, stop_price=round(chandelier, 2))
+            rec["trail_moved_to"] = round(chandelier, 2)
+            log(f"trail stop {cur_stop:.2f} -> {chandelier:.2f}")
+    except (broker.AlpacaError, KeyError, ValueError, TypeError) as e:
+        rec["trail_error"] = str(e)[:120]
 
 
 def cmd_status(cfg):
