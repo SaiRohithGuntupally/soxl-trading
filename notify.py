@@ -71,32 +71,35 @@ def send(msg: str) -> bool:
 
 
 def build_summary() -> str:
-    """Compose a concise performance summary from review.py + the live account."""
-    import review, broker
-    rows = review.load_journal()
-    a = review.analyze(rows)
-    lines = ["📊 SOXL bot summary"]
+    """Compose a concise multi-bot performance summary across ALL bots."""
+    import os, review, broker
+    lines = ["📊 Trading bots — daily summary"]
+    positions = {}
     try:
         key, sec = broker.load_creds()
         acct = broker.get_account(key, sec)
-        pos = next((p for p in broker.get_positions(key, sec)
-                    if p["symbol"] == "SOXL"), None)
-        lines.append(f"Equity ${float(acct['equity']):,.0f}")
-        if pos:
-            lines.append(f"SOXL {pos['qty']} sh, intraday "
-                         f"${float(pos['unrealized_intraday_pl']):+,.0f}")
-        else:
-            lines.append("SOXL: flat")
+        for p in broker.get_positions(key, sec):
+            positions[p["symbol"]] = p
+        lines.append(f"Account equity ${float(acct['equity']):,.0f}")
     except Exception as e:
         lines.append(f"(live account unavailable: {type(e).__name__})")
-    days = a["cum_realized_by_day"]
-    if days:
-        last_day = sorted(days)[-1]
-        lines.append(f"Today P&L ${days[last_day]:+,.0f}")
-    lines.append(f"Trades: {a['opens']} open / {a['trend_closes']} exit / "
-                 f"{a['kill_switches']} kill")
-    flags = review.diagnose(a, {})
-    lines.append(flags[0])
+
+    total_today = 0.0
+    for cfg_path in review.all_configs():
+        sym = review.symbol_of(cfg_path)
+        jpath = os.path.join(os.path.dirname(cfg_path), "journal.jsonl")
+        a = review.analyze(review.load_journal(jpath))
+        days = a["cum_realized_by_day"]
+        today_pnl = days[sorted(days)[-1]] if days else 0.0
+        total_today += today_pnl
+        pos = positions.get(sym)
+        held = (f"{pos['qty']}sh ${float(pos['unrealized_intraday_pl']):+,.0f}"
+                if pos else "flat")
+        kills = a["kill_switches"]
+        warn = " 🚨KILL" if kills else ""
+        lines.append(f"• {sym}: {held} | today ${today_pnl:+,.0f} | "
+                     f"{a['opens']}open/{a['trend_closes']}exit{warn}")
+    lines.append(f"Combined today: ${total_today:+,.0f}")
     return "\n".join(lines)
 
 

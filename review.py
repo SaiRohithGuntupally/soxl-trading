@@ -23,11 +23,26 @@ JOURNAL = os.path.join(HERE, "journal.jsonl")
 STATE = os.path.join(HERE, "state.json")
 
 
-def load_journal() -> list[dict]:
-    if not os.path.exists(JOURNAL):
+def all_configs() -> list[str]:
+    """Every bot config: root SOXL + bots/<TICKER>/config.json."""
+    import glob
+    return [os.path.join(HERE, "config.json")] + sorted(
+        glob.glob(os.path.join(HERE, "bots", "*", "config.json")))
+
+
+def symbol_of(config_path: str) -> str:
+    try:
+        return json.load(open(config_path)).get("symbol", "?")
+    except Exception:
+        return "?"
+
+
+def load_journal(path: str = None) -> list[dict]:
+    path = path or JOURNAL
+    if not os.path.exists(path):
         return []
     out = []
-    with open(JOURNAL) as fh:
+    with open(path) as fh:
         for line in fh:
             line = line.strip()
             if line:
@@ -98,9 +113,18 @@ def diagnose(a: dict, live: dict) -> list[str]:
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--config", help="review a specific bot (default: root SOXL)")
     args = ap.parse_args(argv)
 
-    rows = load_journal()
+    if args.config:
+        d = os.path.dirname(os.path.abspath(args.config))
+        journal_path = os.path.join(d, "journal.jsonl")
+        state_path = os.path.join(d, "state.json")
+        sym = symbol_of(args.config)
+    else:
+        journal_path, state_path, sym = JOURNAL, STATE, "SOXL"
+
+    rows = load_journal(journal_path)
     a = analyze(rows)
 
     live = {}
@@ -108,18 +132,19 @@ def main(argv):
         key, sec = broker.load_creds()
         acct = broker.get_account(key, sec)
         positions = broker.get_positions(key, sec)
-        pos = next((p for p in positions if p["symbol"] == "SOXL"), None)
+        pos = next((p for p in positions if p["symbol"] == sym), None)
         live = {
+            "symbol": sym,
             "equity": float(acct["equity"]),
             "buying_power": float(acct["buying_power"]),
-            "soxl_position": ({"qty": pos["qty"],
-                               "unrealized_intraday_pl": float(pos["unrealized_intraday_pl"])}
-                              if pos else None),
+            "position": ({"qty": pos["qty"],
+                          "unrealized_intraday_pl": float(pos["unrealized_intraday_pl"])}
+                         if pos else None),
         }
     except broker.AlpacaError as e:
         live = {"error": str(e)}
 
-    state = json.load(open(STATE)) if os.path.exists(STATE) else {}
+    state = json.load(open(state_path)) if os.path.exists(state_path) else {}
     flags = diagnose(a, live)
     blob = {"analysis": a, "live": live, "state": state, "flags": flags}
 
@@ -127,7 +152,7 @@ def main(argv):
         print(json.dumps(blob, indent=2)); return 0
 
     print("=" * 56)
-    print("  SOXL BOT — PERFORMANCE REVIEW")
+    print(f"  {sym} BOT — PERFORMANCE REVIEW")
     print("=" * 56)
     print(f"  ticks logged   : {a['ticks']}   last action: {a['last_action']}")
     print(f"  entries        : {a['opens']}   trend-exits: {a['trend_closes']}   "
@@ -136,14 +161,14 @@ def main(argv):
           f"red {a['red_days']})")
     print(f"  quick reversals: {a['quick_reversals']}  (entries chopped out fast)")
     if a["cum_realized_by_day"]:
-        print("  SOXL P&L by day:")
+        print(f"  {sym} P&L by day:")
         for d, v in a["cum_realized_by_day"].items():
             print(f"     {d}: ${v:,.2f}")
     if "error" in live:
         print(f"  live account   : ERROR {live['error']}")
     else:
         print(f"  live equity    : ${live.get('equity', 0):,.2f}")
-        print(f"  SOXL position  : {live.get('soxl_position')}")
+        print(f"  {sym} position  : {live.get('position')}")
     if state:
         print(f"  state          : halted={state.get('halted')} "
               f"day_start_equity={state.get('day_start_equity')}")
