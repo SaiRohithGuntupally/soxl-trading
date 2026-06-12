@@ -17,6 +17,10 @@
   "chand_atr": 3.0,
   "trail_tp_R": 8.0,
 
+  "mkt_confirm": true,
+  "mkt_symbol": "SPY",
+  "mkt_ema": 20,
+
   "event_block_days": 1,
   "event_dates": [
     "2026-06-17",

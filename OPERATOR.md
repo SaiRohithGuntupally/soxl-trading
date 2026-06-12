@@ -66,6 +66,11 @@ regimes. Findings so far: EMA20 / ADX25 / chand3 are at their local optimum (wel
 tuned). Long/short via SOXS was rejected. `regime_ma=200` cuts drawdown but lowers
 return. `stop_atr=1.0` backtests higher Sharpe but sizes positions ~50% bigger
 (more real gap risk the backtest ignores) — treat as a leverage decision, not free.
+Round 2 (improve2.py): edge SURVIVES costs (low turnover, ~53 trades/6y). ADX-dynamic
+sizing = just leverage (Sharpe flat). **SPY broad-market confirm (mkt_confirm: SPY>EMA20)
+ADOPTED** — modest but economically sound: Sharpe 0.89→0.94, maxDD 28→25%. Only the
+short SPY-EMA helps (not a wide plateau) — don't extend it without re-testing. We are
+now at diminishing returns; the real test is forward (live) performance vs backtest.
 
 ## Maintain the event calendar (good use of your judgment)
 

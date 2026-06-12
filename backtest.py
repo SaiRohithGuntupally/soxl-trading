@@ -234,6 +234,9 @@ def simulate(dates, soxx, soxl, p):
     pending_entry = pending_exit = False
     eq_curve = []; trades = []; days_in = 0
     ev = p["event_dates"]; evb = p["event_block"]
+    cost = p.get("cost_bps", 0) / 10000.0   # per-side transaction cost
+    eg = p.get("entry_gate")                 # optional per-day bool: allow entry
+    ss = p.get("size_scale")                 # optional per-day risk multiplier
 
     def near_event(idx):
         if not ev or evb <= 0:
@@ -248,12 +251,12 @@ def simulate(dates, soxx, soxl, p):
 
         # 1. execute pending fills at today's open
         if pending_exit and pos:
-            cash += pos["sh"] * o
+            cash += pos["sh"] * o * (1 - cost)
             trades.append(o / pos["entry"] - 1)
             pos = None; pending_exit = False
         if pending_entry and pos is None:
             sh = pending_entry
-            cash -= sh * o
+            cash -= sh * o * (1 + cost)
             pos = {"sh": sh, "entry": o, "stop": pend_stop, "tp": pend_tp,
                    "hh": h, "atr": atr[i] or 0}
             pending_entry = False
@@ -268,10 +271,10 @@ def simulate(dates, soxx, soxl, p):
                 stop = max(stop, pos["hh"] - p["chand_atr"] * pos["atr"])
             if l <= stop:                      # stop hit (gap -> open)
                 fill = min(o, stop)
-                cash += pos["sh"] * fill; trades.append(fill / pos["entry"] - 1); pos = None
+                cash += pos["sh"] * fill * (1 - cost); trades.append(fill / pos["entry"] - 1); pos = None
             elif (not p["trail"]) and h >= pos["tp"]:
                 fill = max(o, pos["tp"])
-                cash += pos["sh"] * fill; trades.append(fill / pos["entry"] - 1); pos = None
+                cash += pos["sh"] * fill * (1 - cost); trades.append(fill / pos["entry"] - 1); pos = None
             else:
                 pos["hh"] = max(pos["hh"], h)
 
@@ -285,10 +288,13 @@ def simulate(dates, soxx, soxl, p):
                 long_ok = False
             if pos and not (c_soxx(soxx, i) > ema[i]):
                 pending_exit = True
-            elif pos is None and long_ok and not near_event(i) and atr[i]:
+            elif (pos is None and long_ok and not near_event(i) and atr[i]
+                  and (eg is None or eg[i])):
                 # size at next open ~ today's close; risk = risk_pct of equity
                 eq = cash
                 rp = p["risk_pct"]
+                if ss is not None:
+                    rp = rp * ss[i]
                 if p["volscale"]:
                     atr_pct = atr[i] / soxl[i]["c"]
                     rp = rp * min(1.0, p["vol_ref"] / atr_pct) if atr_pct else rp
@@ -349,9 +355,17 @@ def main(argv):
     soxx = fetch("SOXX", start, key, sec)
     soxl = fetch("SOXL", start, key, sec)
     soxs = fetch("SOXS", start, key, sec)
+    spy = fetch("SPY", start, key, sec)
     dates, soxx, soxl, soxs = align3(soxx, soxl, soxs)
     print(f"Backtest window: {dates[0]} -> {dates[-1]}  ({len(dates)} days)\n")
     bh = soxl[-1]["c"] / soxl[0]["c"] - 1
+
+    # SPY broad-market confirmation gate (live mkt_confirm), aligned to our dates.
+    spyd = {b["date"]: b for b in spy}
+    spc = [spyd[d]["c"] if d in spyd else None for d in dates]
+    spe = ema_series([c if c is not None else 0 for c in spc], 20)
+    spy_gate = [(spc[i] is not None and spe[i] is not None and spc[i] > spe[i])
+                or spc[i] is None for i in range(len(dates))]
 
     def row(name, m):
         print(f"{name:30} {m['ret']*100:>8.0f}% {m['cagr']*100:>6.0f}% "
@@ -360,12 +374,14 @@ def main(argv):
 
     hdr = f"{'strategy':30} {'return':>9} {'CAGR':>7} {'maxDD':>7} {'Sharpe':>7} {'trades':>7} {'win%':>6} {'expo':>6}"
 
-    print("== STRATEGY VARIANTS (risk 2%) ==")
+    print("== STRATEGY VARIANTS (risk 4%, ~10bps cost) ==")
     print(hdr); print("-" * len(hdr))
-    rec = cfg(chop=True, trail=True)
-    row("Long-only (current live)", simulate(dates, soxx, soxl, rec))
-    row("Long/SHORT (add SOXS)", simulate_ls(dates, soxx, soxl, soxs,
-                                             cfg(chop=True, trail=True, shorts=True)))
+    live = cfg(chop=True, trail=True, risk_pct=4.0, cost_bps=10, entry_gate=spy_gate)
+    row("CURRENT LIVE (chop+trail+SPY)", simulate(dates, soxx, soxl, live))
+    row("  without SPY confirm", simulate(dates, soxx, soxl,
+                                          cfg(chop=True, trail=True, risk_pct=4.0, cost_bps=10)))
+    row("  long/SHORT (rejected)", simulate_ls(dates, soxx, soxl, soxs,
+                                               cfg(chop=True, trail=True, risk_pct=4.0, shorts=True)))
     print("-" * len(hdr))
     print(f"{'Buy & hold SOXL':30} {bh*100:>8.0f}%   (~90% drawdown)\n")
 

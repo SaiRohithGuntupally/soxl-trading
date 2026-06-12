@@ -45,6 +45,7 @@ DEFAULTS = {
     "max_position_pct": 50.0, "feed": "iex",
     "chop_filter": True, "adx_min": 25.0,
     "trailing": True, "chand_atr": 3.0, "trail_tp_R": 8.0,
+    "mkt_confirm": True, "mkt_symbol": "SPY", "mkt_ema": 20,
     "event_block_days": 1, "event_dates": [],
 }
 HARD_KILL_CEILING = 10.0  # reviewer may not set max_daily_loss_pct above this
@@ -189,14 +190,16 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     adx_val = broker.adx(ubars, 14) if cfg.get("chop_filter") else None
     chop_ok = (not cfg.get("chop_filter")) or (adx_val is not None
                                                and adx_val >= float(cfg["adx_min"]))
+    # Broad-market confirmation: don't go long leveraged semis when SPY is risk-off.
+    mkt_ok = _mkt_confirm(cfg, key, sec)
     # Event gating: block NEW entries within event_block_days before a known event.
     event_block = _near_event(cfg, today)
 
-    entry_ok = trend_intact and rising and chop_ok and not event_block
+    entry_ok = trend_intact and rising and chop_ok and mkt_ok and not event_block
     rec.update({"underlying_close": round(u_close, 2),
                 "ema_now": round(ema_now, 2), "ema_prev": round(ema_prev, 2),
                 "adx": round(adx_val, 1) if adx_val is not None else None,
-                "event_block": event_block, "entry_ok": entry_ok})
+                "mkt_ok": mkt_ok, "event_block": event_block, "entry_ok": entry_ok})
 
     orders = broker.get_open_orders(key, sec)
 
@@ -268,6 +271,19 @@ def _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log, state) -> str:
     notify.send(f"🟢 SOXL OPEN — bought {shares} @ ~${entry:.2f} | "
                 f"stop ${stop:.2f} / target ${tp:.2f} (GTC)")
     return "OPEN"
+
+
+def _mkt_confirm(cfg, key, sec) -> bool:
+    """True if broad-market confirmation passes (SPY > its EMA) or is disabled.
+    Fail-OPEN on data error so a SPY data hiccup never silently halts trading."""
+    if not cfg.get("mkt_confirm"):
+        return True
+    try:
+        b = broker.daily_bars(cfg.get("mkt_symbol", "SPY"), key, sec, feed=cfg["feed"])
+        e_now, _ = broker.ema_pair(b, int(cfg.get("mkt_ema", 20)))
+        return b[-1]["c"] > e_now
+    except broker.AlpacaError:
+        return True
 
 
 def _near_event(cfg, today: str) -> bool:
