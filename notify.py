@@ -95,7 +95,8 @@ def build_summary() -> str:
         lines.append(f"Today P&L ${days[last_day]:+,.0f}")
     lines.append(f"Trades: {a['opens']} open / {a['trend_closes']} exit / "
                  f"{a['kill_switches']} kill")
-    lines.append(a["flags"][0])
+    flags = review.diagnose(a, {})
+    lines.append(flags[0])
     return "\n".join(lines)
 
 
