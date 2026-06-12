@@ -135,7 +135,22 @@ DEFAULTS = dict(
     volscale=False, vol_ref=0.11,         # ~11% daily ATR is "normal" for SOXL
     event_block=0, event_dates=frozenset(),
     shorts=False,                          # long/short: hold SOXS in downtrends
+    regime_ma=0,                           # only go long if SOXX > SMA(regime_ma)
 )
+
+
+def sma_series(vals, period):
+    out = [None] * len(vals)
+    if period <= 0:
+        return out
+    run = 0.0
+    for i, v in enumerate(vals):
+        run += v
+        if i >= period:
+            run -= vals[i - period]
+        if i >= period - 1:
+            out[i] = run / period
+    return out
 
 
 def align3(soxx, soxl, soxs):
@@ -213,6 +228,7 @@ def simulate(dates, soxx, soxl, p):
     ema = ema_series([b["c"] for b in soxx], p["ema_len"])
     adx = adx_series(soxx, 14)
     atr = atr_series(soxl, p["atr_len"])
+    sma = sma_series([b["c"] for b in soxx], p.get("regime_ma", 0))
 
     cash = p["capital"]; pos = None
     pending_entry = pending_exit = False
@@ -265,6 +281,8 @@ def simulate(dates, soxx, soxl, p):
             long_ok = c_soxx(soxx, i) > ema[i] and rising
             if p["chop"] and (adx[i] is None or adx[i] < p["adx_min"]):
                 long_ok = False
+            if p.get("regime_ma", 0) and (sma[i] is None or c_soxx(soxx, i) < sma[i]):
+                long_ok = False
             if pos and not (c_soxx(soxx, i) > ema[i]):
                 pending_exit = True
             elif pos is None and long_ok and not near_event(i) and atr[i]:
@@ -285,7 +303,9 @@ def simulate(dates, soxx, soxl, p):
 
         eq_curve.append(cash + (pos["sh"] * c if pos else 0))
 
-    return metrics(dates, eq_curve, trades, days_in, p["capital"])
+    res = metrics(dates, eq_curve, trades, days_in, p["capital"])
+    res["eq"] = eq_curve
+    return res
 
 
 def c_soxx(soxx, i):

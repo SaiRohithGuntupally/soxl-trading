@@ -59,6 +59,14 @@ doesn't beat the baseline in the backtest is curve-fitting — revert it.
 Validated baseline (2020-07..2026-06): chop_filter + trailing lifted Sharpe 0.54→0.89,
 maxDD 26%→15%. Vol-scaled sizing was tested and dropped (no effect). Keep these on.
 
+`experiments.py` sweeps knobs + structural ideas and checks robustness across the
+2022 bear vs the bull. Use it to PROPOSE variants. Adopt a change ONLY if it (a) sits
+on a plateau of nearby-good values (not a lone spike) AND (b) holds up in BOTH
+regimes. Findings so far: EMA20 / ADX25 / chand3 are at their local optimum (well
+tuned). Long/short via SOXS was rejected. `regime_ma=200` cuts drawdown but lowers
+return. `stop_atr=1.0` backtests higher Sharpe but sizes positions ~50% bigger
+(more real gap risk the backtest ignores) — treat as a leverage decision, not free.
+
 ## Maintain the event calendar (good use of your judgment)
 
 `config.json` `event_dates` blocks new entries within `event_block_days` before known
