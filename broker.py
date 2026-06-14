@@ -106,6 +106,23 @@ def todays_fills(symbol, date, key, sec):
     return [a for a in acts if a.get("symbol") == symbol]
 
 
+def all_fills(symbol, key, sec, after="2026-06-01"):
+    """Every FILL for `symbol` since `after` (paginated). The bot's full record."""
+    out = []; token = None
+    while True:
+        path = f"/v2/account/activities?activity_types=FILL&after={after}&page_size=100"
+        if token:
+            path += f"&page_token={token}"
+        acts = api("GET", TRADE_HOST, path, key, sec)
+        if not isinstance(acts, list) or not acts:
+            break
+        out += [a for a in acts if a.get("symbol") == symbol]
+        if len(acts) < 100:
+            break
+        token = acts[-1].get("id")
+    return out
+
+
 def close_position(symbol, key, sec):
     return api("DELETE", TRADE_HOST, f"/v2/positions/{symbol}", key, sec)
 

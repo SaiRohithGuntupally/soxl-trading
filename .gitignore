@@ -14,3 +14,5 @@ notify.log
 portfolio.json
 portfolio.json.tmp
 all_reviews.json
+forward/
+tracker.log
