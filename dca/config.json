@@ -1,0 +1,11 @@
+{
+  "symbol": "SOXL",
+  "drop_pct": 8.0,
+  "max_safety_orders": 8,
+  "allocated_capital": 20000.0,
+  "feed": "iex",
+
+  "_strategy": "DCA accumulate-and-hold. Base order + a safety order each 8% drop below the last buy; NEVER sells; NO kill switch (rides the drawdown for recovery upside). Validated in ../dca.py: 8% drops, no take-profit, beat buy-hold slightly (+2396% vs +1649%) BUT with ~88% max drawdown. Bounded by max_safety_orders(8) + allocated_capital($20k) so it can't consume the account.",
+  "_account": "MUST use its own dca/.env (separate Alpaca paper account). Sharing the trend bots' account would collide on the single SOXL position.",
+  "_risk": "By design this has no stop/kill switch and will sit through an ~88% drawdown. Only the allocated_capital cap bounds the loss. This is leveraged buy-and-hold + crash-buying, NOT capital preservation."
+}
