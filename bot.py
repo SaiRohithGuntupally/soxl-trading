@@ -180,6 +180,10 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     if pnl <= kill_level or port_breach:
         if not dry_run and pos:
             try:
+                # Cancel resting bracket legs FIRST: they hold the shares as
+                # held_for_orders, so a bare position DELETE 403s and the kill
+                # switch would silently fail to flatten while marking halted.
+                broker.cancel_symbol_orders(cfg["symbol"], key, sec)
                 broker.close_position(cfg["symbol"], key, sec)
             except broker.AlpacaError as e:
                 rec["flatten_error"] = str(e)
@@ -247,8 +251,11 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     # --- decide ---
     if pos and exit_signal:
         if not dry_run:
-            broker.close_position(sym, key, sec)
+            # Cancel resting bracket legs FIRST (they hold the shares as
+            # held_for_orders); otherwise close_position 403s and the tick
+            # crashes uncaught before the exit is ever recorded.
             broker.cancel_symbol_orders(sym, key, sec)
+            broker.close_position(sym, key, sec)
         state["trail_hh"] = None
         rec["action"] = "CLOSE_SIGNAL"
         log(f"exit signal while holding -> close {sym}")
@@ -408,6 +415,8 @@ def main(argv):
         key, sec = broker.load_creds()
         positions = broker.get_positions(key, sec)
         if find_position(positions, cfg["symbol"]):
+            # cancel resting bracket legs first so the shares are freed to close
+            broker.cancel_symbol_orders(cfg["symbol"], key, sec)
             print(broker.close_position(cfg["symbol"], key, sec))
         else:
             print(f"no {cfg['symbol']} position to close")
