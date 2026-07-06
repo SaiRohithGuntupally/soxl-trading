@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -153,6 +154,34 @@ def open_stop_order(symbol, key, sec):
 
 def close_all(key, sec):
     return api("DELETE", TRADE_HOST, "/v2/positions?cancel_orders=true", key, sec)
+
+
+def flatten_symbol(symbol, key, sec, attempts=4, settle=1.5):
+    """Cancel the symbol's resting bracket legs, THEN close the position — with a
+    settle-and-retry so the flatten actually completes within the tick.
+
+    Cancelling a bracket leg does not release its shares synchronously: Alpaca
+    keeps them `held_for_orders` for a moment, so a close_position() fired
+    immediately after the cancel can still 403 (code 40310000, "insufficient qty
+    available"). Cancel-first ordering alone is necessary but NOT sufficient. We
+    re-cancel and retry a few times, tolerating only that specific 403, so the
+    kill switch can't mark `halted` while leaving the position open, and a
+    CLOSE_SIGNAL can't crash the tick on the race. Any other error propagates.
+    """
+    last_err = None
+    for i in range(attempts):
+        cancel_symbol_orders(symbol, key, sec)
+        try:
+            return close_position(symbol, key, sec)
+        except AlpacaError as e:
+            last_err = e
+            msg = str(e)
+            # Only the held_for_orders race is retryable; anything else is real.
+            if "40310000" not in msg and "insufficient qty" not in msg:
+                raise
+            if i < attempts - 1:
+                time.sleep(settle)
+    raise last_err
 
 
 def submit_bracket(symbol, qty, entry_stop, take_profit, key, sec, side="buy"):
