@@ -2,6 +2,22 @@
 
 Dated log of autonomous operator changes: what was seen, what changed, why.
 
+## 2026-07-07 (later run) — Anomaly UPDATE: account now shows FOREIGN positions + recovered equity. Still NO code/config change. HUMAN ATTENTION STILL NEEDED.
+
+**Bot:** account-wide (shared Alpaca paper account). Follow-up to the 10:12 incident note below.
+
+**What I saw (authoritative `GET /v2/account` + `/v2/positions`, ~14:00 UTC-6):**
+- `equity`/`portfolio_value` = **+91,255.43** (recovered from the morning's frozen -107,170), `status`=ACTIVE, buying_power 1,930.
+- But `cash` = **-107,170.27** and `long_market_value` = **207,035** — i.e. the morning's "-107k equity" was this negative cash; equity is now positive because the account is stuffed with margin-bought positions.
+- Positions returned: **AVGO 19, NVDA 56, SMCI 447, VTI 89, WMT 960, XLK -48 (short)**, plus our **UPRO 262**. Six of these seven symbols are ones **NONE of our bots ever trade** (our universe is SOXL/UPRO/LABU/MSTR/PLTR/TNA/TQQQ). Our UPRO (262 sh, bought 06-12) is back.
+- `portfolio.json` ledger is now normal (UPRO -314, all others 0) — the phantom -37,571 is gone; the stale -37,571 halt persists only in each bot's `state.json` for the rest of the day.
+
+**Diagnosis:** confirms the 10:12 note — this is an **external/broker-side account event**, not a strategy defect. The paper account is contaminated with positions our system never placed (external use/reset of PA35A01C1X94). The -107k negative cash is from those foreign margin buys, not our trading.
+
+**Change:** NONE. Rationale: (1) not a strategy/structural problem to tune — do not tune in a drawdown/anomaly. (2) Did NOT clear the halt or weaken the breaker (forbidden); it self-clears on the next new trading day. (3) Did NOT flatten anything — the six foreign symbols are not ours to touch (hard rule: only ever trade each bot's own symbol), and our UPRO has no exit signal and is correctly frozen under the halt. All 7 bots: DO NOTHING.
+
+**ACTION FOR HUMAN (unchanged, now with more evidence):** the shared paper account holds positions our bots never opened and carries -107k cash. Inspect/reset the Alpaca paper account and stop whatever external process is trading into it. Do NOT let the operator override the breaker or "trade out" of this.
+
 ## 2026-07-07 — ALL bots halted by portfolio breaker on an ALPACA-SIDE account anomaly. NO code/config change made (documentation only). HUMAN ATTENTION NEEDED.
 
 **Bot:** account-wide (all 7 share one Alpaca paper account PA35A01C1X94). Root SOXL is the config, but the trigger is broker-side.
