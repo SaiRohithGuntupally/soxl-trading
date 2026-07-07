@@ -2,6 +2,25 @@
 
 Dated log of autonomous operator changes: what was seen, what changed, why.
 
+## 2026-07-07 — ALL bots halted by portfolio breaker on an ALPACA-SIDE account anomaly. NO code/config change made (documentation only). HUMAN ATTENTION NEEDED.
+
+**Bot:** account-wide (all 7 share one Alpaca paper account PA35A01C1X94). Root SOXL is the config, but the trigger is broker-side.
+
+**What I saw (authoritative broker queries, not just review.py):**
+- `GET /v2/account`: `equity`=`cash`=`portfolio_value` = **-107,170.25**, buying_power 0, long_market_value 0, NO positions. `last_equity` (07-06 close) = 90,433.08.
+- Portfolio history: 07-06 close ~91,512 -> 07-07 open (13:30 UTC) **-107,170.25**, frozen there all day. An instantaneous ~-$197k discontinuity with no intermediate values.
+- `GET /v2/account/activities?date=2026-07-07` (all types): **EMPTY**. `orders?status=all`: nothing after the 07-06 SOXL sell. So **zero orders, zero fills, zero activities today**.
+- The UPRO position (bought 2026-06-12, 262 sh @ 138.97, held for weeks) **vanished between the 10:07 and 10:12 ticks with no sell order and no fill**.
+
+**Diagnosis:** a real -$197k swing is impossible from our system — max exposure was one ~$37k UPRO position, no shorts, multiplier unchanged, and the bot placed NO orders today. Instantaneous frozen equity + a position disappearing with zero fills/activities = **Alpaca paper-account data corruption / glitch (or an external reset)**, outside the bot's control.
+- The journaled **-37,570.80** "loss" is a phantom: `soxl_daily_pnl` (bot.py:117) = `mv(0) + net_cashflow(0) - day_start_value(37,570.8)` = -37,570.8, because the position vanished with no offsetting fill for the cashflow method to capture. That tripped the PORTFOLIO breaker (>-15% of 91,391) and **correctly** halted all 7 bots.
+
+**Change:** NONE. Rationale: (1) This is a broker-side data anomaly, not a strategy/structural defect to tune. (2) The breaker did its job — halting into an account showing -$107k equity / $0 BP is correct; trading is blocked regardless. (3) There is a latent fragility (phantom P&L when a close's FILL activity is missing/lagged — the 07-06 note already flagged activities can lag), but fixing it touches SAFETY-CRITICAL breaker logic that `backtest.py` does NOT exercise, based on one unreproducible corrupt-state event; hardening a breaker mid-incident on corrupt data risks WEAKENING it (forbidden). That fix belongs in a healthy account with a real reproduction/test, not reactively now. (4) Did NOT clear the halt or override the breaker (forbidden); it self-clears on the next new trading day via the date rollover in tick().
+
+**Other bots:** LABU/MSTR/PLTR/TNA/TQQQ/SOXL all took ZERO positions today and are halted ONLY by the shared portfolio breaker — nothing symbol-specific. All correctly sat out per their gates.
+
+**ACTION FOR HUMAN:** inspect/reset the Alpaca paper account — it reports negative equity with no trades behind it. Do NOT let the operator bot "trade out" of this or edit the kill-switch/P&L path to suppress the halt.
+
 ## 2026-07-06 — SOXL/all bots: settle-and-retry the flatten (cancel-first alone wasn't enough)
 
 **Bot:** root SOXL (bug is in shared `bot.py`/`broker.py`, so it affects every bot: SOXL, UPRO, LABU, MSTR, PLTR, TNA, TQQQ).
