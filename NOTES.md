@@ -67,3 +67,17 @@ Dated log of autonomous operator changes: what was seen, what changed, why.
 **Validation:** not a strategy change, so backtest is unaffected — confirmed `python3 backtest.py` output unchanged (Long-only risk 4% still 162%/Sharpe 0.89) and `bot.py`/`broker.py` compile+import clean.
 
 **Other bots this run:** DO NOTHING. LABU/TQQQ (meanrev) correctly sat out — underlying RSI stayed 46–79, never near the <30 buy trigger. MSTR/PLTR/TNA (trend) correctly blocked — MSTR below a falling EMA, PLTR/TNA ADX 8–20 (< adx_min 25). SOXL & UPRO in a recent drawdown but flagged no structural problem — do not tune in a drawdown.
+
+## 2026-07-08 — root SOXL: event-calendar maintenance (drop past, add BLS-confirmed CPI)
+
+**Bot:** root SOXL (event_dates lives only in the root config; OPERATOR.md's event-calendar duty is SOXL-scoped).
+
+**Review of all 7 bots this run — NO strategy change (disciplined, not busy):**
+- The `11 KILL_SWITCH / 45 HALTED` signature is IDENTICAL across all 7 bots — it is the already-documented 2026-07-07 Alpaca-side account anomaly (portfolio breaker), handled with NO code/config change. It self-cleared on the date rollover: today all bots show `halted: false`. The per-bot KILL_SWITCH flags are stale artifacts of that external incident, not new per-bot risk problems — do NOT lower risk_pct off them.
+- LABU/MSTR/PLTR/TNA/TQQQ: zero entries again — correct gate sit-out (documented pattern), not structural.
+- UPRO: holding 262 sh, unrealized -514.83, today -568.54 realized → a drawdown. Do NOT tune in a drawdown.
+- SOXL: flat, FLAT_NO_SIGNAL, no structural flag.
+
+**Change (non-strategy, backtest-independent — event_dates only blocks new entries near scheduled events; touches no tunable knob):** refreshed root config `event_dates`. Dropped past `2026-06-17` (FOMC). Added BLS-confirmed CPI release dates `2026-09-11`, `2026-10-14`, `2026-11-10` (Aug 12 already present). Did NOT add NVDA Q3 FY27 (November 2026, exact date not yet announced) or Dec 2026 CPI (BLS not yet posted) — no guessing dates. Forward calendar now: 07-14 CPI, 07-29 FOMC, 08-12 CPI, 08-26 NVDA, 09-11 CPI, 09-16 FOMC, 10-14 CPI, 10-28 FOMC, 11-10 CPI, 12-09 FOMC.
+
+**Validation:** `python3 -c json.load` parses clean; guardrails unchanged (risk_pct 4.0, max_daily_loss_pct 10.0, portfolio_max_loss_pct 15.0). No strategy logic changed → backtest unaffected. Sources: BLS CPI release schedule (bls.gov/schedule/news_release/cpi.htm).
