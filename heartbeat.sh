@@ -12,7 +12,7 @@ heartbeat() {
   dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   mkdir -p "$dir/heartbeat" 2>/dev/null
   printf '%s rc=%s\n' "$(date -u +%FT%TZ)" "$rc" > "$dir/heartbeat/$name" 2>/dev/null
-  url="$(grep -E '^HEALTHCHECK_URL=' "$dir/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' )"
+  url="$(grep -E '^HEALTHCHECK_URL=' "$dir/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'")"
   [ -n "$url" ] || return 0
   [ "$rc" = "0" ] || url="${url%/}/fail"
   curl -fsS -m 10 --retry 2 -o /dev/null "$url" 2>/dev/null || true
