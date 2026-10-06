@@ -47,6 +47,28 @@ python3 bot.py --flatten    # close ONLY the SOXL position now
 python3 review.py           # performance review + diagnosis
 ```
 
+## Operations (keeping the fleet alive)
+
+The fleet ran silently dead from 2026-07-08 to 2026-10-06 and nobody noticed. These
+exist so that cannot happen again:
+
+| command | where | what |
+| --- | --- | --- |
+| `python3 fleet_status.py` | anywhere with `.env` | live fleet health: positions, last fleet order age, every bot's current entry gate, verdict (`STALE` = host probably down). Exit 2 when stale. |
+| `./doctor.sh` | on the host (Pi) | PASS/FAIL checklist: cron lines, cron daemon, heartbeat ages, tick errors, Alpaca auth, git sync, claude CLI, Signal gateway. |
+| `./install_cron.sh` | on the host | installs/re-installs the COMPLETE crontab (7 bots, operator, tracker, Signal summary, watchdog) idempotently. `--dry-run` / `--remove`. |
+| `heartbeat.sh` | sourced by the run scripts | stamps `heartbeat/<bot>` after every tick and pings `HEALTHCHECK_URL` if set. |
+
+**Set the external dead-man alert (2 minutes, free):** create a check at
+https://healthchecks.io (period 15 min, grace 60 min), then on the host add
+`HEALTHCHECK_URL=https://hc-ping.com/<uuid>` to `.env`. Every tick pings it; if the
+Pi loses power, network, cron, or the ticks start crashing, healthchecks emails/pushes
+you within the hour. Nothing on the Pi itself can alert you that the Pi is dead.
+
+**Recovery runbook:** `./doctor.sh` -> fix FAILs top to bottom -> `./install_cron.sh`
+-> `python3 fleet_status.py` should move from `STALE` to `WATCH`/`OK` on the next
+open-market tick.
+
 ## Runtime model
 
 - **Scheduled cloud agent** (chosen): a cron routine runs `bot.py` + `review.py` every

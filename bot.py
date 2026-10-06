@@ -125,6 +125,18 @@ def soxl_daily_pnl(cfg, today, pos_market_value, day_start_value, key, sec):
     return pos_market_value + net_cashflow - day_start_value
 
 
+def bars_lookback_days(cfg: dict) -> int:
+    """Calendar days of history to fetch so every indicator in this config has
+    enough TRADING bars. ~252 trading days per 365 calendar days, plus a buffer.
+    Before this existed the fetch was a fixed 160 days (~110 bars), so a 200-day
+    regime SMA could never be computed and the meanrev regime gate was silently
+    skipped (live diverged from analyze.py, which requires the regime)."""
+    need = max(int(cfg.get("ema_len") or 0), int(cfg.get("regime_ma") or 0),
+               int(cfg.get("rsi_len") or 14) * 3, int(cfg.get("mkt_ema") or 20),
+               14 * 3)          # ADX(14) needs ~3x its period to settle
+    return max(160, int(need * 1.5) + 30)
+
+
 def tick(cfg, dry_run=False, log=print) -> dict:
     key, sec = broker.load_creds()
     acct = broker.get_account(key, sec)
@@ -215,7 +227,8 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     # --- strategy-aware signal from the underlying ---
     strat = cfg.get("strategy", "trend")
     sym = cfg["symbol"]; und = cfg["underlying"]
-    ubars = broker.daily_bars(und, key, sec, feed=cfg["feed"])
+    ubars = broker.daily_bars(und, key, sec, lookback_days=bars_lookback_days(cfg),
+                              feed=cfg["feed"])
     u_close = ubars[-1]["c"]
     mkt_ok = _mkt_confirm(cfg, key, sec)               # broad-market risk-off filter
     event_block = _near_event(cfg, today)              # don't enter before known events
@@ -226,7 +239,11 @@ def tick(cfg, dry_run=False, log=print) -> dict:
         # Buy oversold dips, but only within an uptrend regime; exit at mean reversion.
         rsi = broker.rsi(ubars, int(cfg.get("rsi_len", 14)))
         regime = broker.sma(ubars, int(cfg.get("regime_ma", 200)))
-        regime_ok = (regime is None) or (u_close > regime)
+        # Fail CLOSED, matching analyze.py's strat_meanrev (which never enters
+        # without a regime value). Fail-open here would buy dips in downtrends.
+        regime_ok = (regime is not None) and (u_close > regime)
+        if regime is None:
+            rec["regime_unavailable"] = f"need {cfg.get('regime_ma', 200)} bars, have {len(ubars)}"
         entry_ok = (rsi is not None and rsi < float(cfg.get("rsi_buy", 30))
                     and regime_ok and mkt_ok and not event_block)
         exit_signal = rsi is not None and rsi > float(cfg.get("rsi_sell", 55))

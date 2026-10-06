@@ -45,6 +45,11 @@ python3 bot.py               # one live tick (paper). Re-run to see it act.
 ```
 
 ### 6. Schedule it (cron, every 15 min on weekdays)
+**Preferred (whole fleet, idempotent):** `./install_cron.sh` — installs every cron line
+(7 bots, operator, tracker, Signal summary, watchdog). Verify with `./doctor.sh`.
+Set `HEALTHCHECK_URL` in `.env` so you are paged when the Pi dies (README: Operations).
+
+Manual single-bot alternative:
 ```bash
 crontab -e
 ```

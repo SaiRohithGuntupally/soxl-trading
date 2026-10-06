@@ -16,3 +16,8 @@ portfolio.json.tmp
 all_reviews.json
 forward/
 tracker.log
+
+# dead-man heartbeat stamps (per machine)
+heartbeat/
+fleet_status.log
+fleet_status.json

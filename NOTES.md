@@ -81,3 +81,32 @@ Dated log of autonomous operator changes: what was seen, what changed, why.
 **Change (non-strategy, backtest-independent — event_dates only blocks new entries near scheduled events; touches no tunable knob):** refreshed root config `event_dates`. Dropped past `2026-06-17` (FOMC). Added BLS-confirmed CPI release dates `2026-09-11`, `2026-10-14`, `2026-11-10` (Aug 12 already present). Did NOT add NVDA Q3 FY27 (November 2026, exact date not yet announced) or Dec 2026 CPI (BLS not yet posted) — no guessing dates. Forward calendar now: 07-14 CPI, 07-29 FOMC, 08-12 CPI, 08-26 NVDA, 09-11 CPI, 09-16 FOMC, 10-14 CPI, 10-28 FOMC, 11-10 CPI, 12-09 FOMC.
 
 **Validation:** `python3 -c json.load` parses clean; guardrails unchanged (risk_pct 4.0, max_daily_loss_pct 10.0, portfolio_max_loss_pct 15.0). No strategy logic changed → backtest unaffected. Sources: BLS CPI release schedule (bls.gov/schedule/news_release/cpi.htm).
+
+## 2026-10-06 — fleet found DEAD since 07-08; monitoring + regime-gate fix (Mac, human-initiated)
+
+**Evidence:** Alpaca: last fleet order 2026-07-08 (UPRO sell), zero orders/activities since; no fleet
+positions; last Pi push 07-08. On 10-06 MSTR (ADX 39.5) and PLTR (ADX 28.8) both passed their entry
+gates with SPY confirm OK — a live fleet would have entered. Pi unreachable from the Mac (off LAN).
+Live window realized: SOXL 34 sh 215.20 -> 202.72 (-$424; SOXL later fell to ~164, exit worked),
+UPRO 262 sh 138.97 -> 139.26 (+$77).
+
+**Root cause of the 3-month blind spot:** every alert path (Signal, operator) lives ON the Pi; absence
+of a daily summary went unnoticed. No external dead-man's switch, no one-command status.
+
+**Changes (ops + one correctness fix, no strategy knobs touched):**
+- `heartbeat.sh` sourced by `run_tick.sh`/`run_bot.sh`/`operator.sh`: stamps `heartbeat/<bot>` and
+  pings `HEALTHCHECK_URL` (healthchecks.io) when set -> external alert when the host dies.
+- `fleet_status.py`: fleet health from anywhere; `STALE` verdict when no fleet order for N days while
+  bots are enter-eligible and flat; `--notify` cron'd 14:30 MT as an on-host watchdog.
+- `install_cron.sh`: idempotent full crontab (also finally installs the pending tracker crons);
+  `doctor.sh`: on-host PASS/FAIL checklist for recovery.
+- **bot.py bug fix:** `daily_bars` fetched a fixed 160 calendar days (~110 bars) but TQQQ/LABU use
+  `regime_ma: 200`, so `sma()` returned None and `regime_ok` **failed OPEN** — the meanrev regime gate
+  was silently disabled live (analyze.py's backtest REQUIRES the regime). Now `bars_lookback_days(cfg)`
+  sizes the fetch per config (330 d -> 227 bars for a 200 SMA, verified live) and the gate fails CLOSED
+  with `regime_unavailable` journaled. Trend bots unaffected (lookback stays 160 d).
+- review.py: "Red days dominate" needed red>=3 (fired on 1 red/0 green).
+
+**Validation:** py_compile clean; `fleet_status.py` live run -> STALE (correct); TQQQ SMA200 now
+670.08 vs close 759.62 (regime ok); `install_cron.sh --dry-run` renders 12 lines; backtest.py untouched.
+**Pending on the Pi (human):** `git pull`, `./doctor.sh`, `./install_cron.sh`, set `HEALTHCHECK_URL`.

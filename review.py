@@ -101,7 +101,7 @@ def diagnose(a: dict, live: dict) -> list[str]:
     if a["ticks"] >= 20 and a["opens"] == 0:
         flags.append("Many ticks, zero entries — gate may be too strict "
                      "(ema_len too long, or persistent downtrend: this may be correct).")
-    if a["trading_days"] >= 3 and a["red_days"] > a["green_days"] * 2:
+    if a["trading_days"] >= 3 and a["red_days"] >= 3 and a["red_days"] > a["green_days"] * 2:
         flags.append("Red days dominate — strategy underperforming; investigate "
                      "entry timing vs the underlying trend.")
     if not flags:

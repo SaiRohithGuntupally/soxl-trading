@@ -4,6 +4,7 @@
 # bot per OPERATOR.md, then commit & push. Trading ticks are handled by the
 # dedicated run_tick.sh / run_bot.sh crons; this is the review/edit cycle.
 cd "$(dirname "$0")" || exit 1
+. ./heartbeat.sh
 ts="$(date -u +%FT%TZ)"
 export PATH="$HOME/.local/bin:$PATH"
 [ -f "$HOME/soxl-trading/.operator-env" ] && . "$HOME/soxl-trading/.operator-env"
@@ -40,3 +41,4 @@ fi
 git add -A >/dev/null 2>&1 || true
 git commit -q -m "operator: $ts" >/dev/null 2>&1 || true
 git push -q origin main >/dev/null 2>&1 || true
+heartbeat operator 0
