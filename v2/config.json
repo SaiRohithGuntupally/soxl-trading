@@ -9,10 +9,10 @@
     "max_position_pct": 50.0
   },
   "core": {
-    "symbol": "SPY",
+    "symbol": "QQQ",
     "fraction": 0.5,
     "rebalance_band": 0.10,
-    "_note": "Beta, not alpha: this is simply being half long the market. Band is in fraction-of-equity points: rebalance only when the core drifts outside 40%..60% of equity. The research variant bought once and never rebalanced; a wide band is the closest live equivalent that still handles deposits and large drift."
+    "_note": "Changed SPY -> QQQ on 2026-10-06 at the owner's request for higher return NOW: research/rq6 variant G and the 2026-10-06 lever table show 5 bots + 50% QQQ core at 19.9% CAGR / 37% maxDD / Sharpe 0.99 vs SPY core 17.3% / 30% / 0.94, and crucially BETTER in the untuned 2016-2020 window (16.1% CAGR, Sharpe 0.93 vs 10.0%, 0.68). Cost: it is a tech-sector bet; 2022 was -30% vs -22%. Revert = set symbol back to SPY. Beta, not alpha: this is simply being half long the market. Band is in fraction-of-equity points: rebalance only when the core drifts outside 40%..60% of equity. The research variant bought once and never rebalanced; a wide band is the closest live equivalent that still handles deposits and large drift."
   },
   "defaults": {
     "strategy": "trend", "ema_len": 20, "atr_len": 14, "chop_filter": true, "adx_min": 25.0,
