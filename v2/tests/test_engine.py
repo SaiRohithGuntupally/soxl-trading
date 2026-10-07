@@ -142,7 +142,7 @@ class TestTick(Base):
         self.assertIn("bracket", kinds)                       # bot entries
         self.assertIn("market", kinds)                        # core buy (no SPY held)
         core = [p for p in fb.placed if p[0] == "market"][0]
-        self.assertEqual(core[1], "SPY"); self.assertEqual(core[3], "buy")
+        self.assertEqual(core[1], self.cfg["core"]["symbol"]); self.assertEqual(core[3], "buy")
         # non-core sizing: core not yet held, so size_equity == equity this first time
         self.assertEqual(rec["bots"]["SOXL"]["action"], "OPEN")
         # second tick same day: already decided -> no new decision
@@ -150,7 +150,7 @@ class TestTick(Base):
         self.assertEqual(rec2["mode"], "MANAGE")
 
     def test_decision_tick_sizes_off_equity_minus_core(self):
-        fb = FakeBroker(equity=100000.0, positions=[pos("SPY", 100, 500.0)])  # core = $50k
+        fb = FakeBroker(equity=100000.0, positions=[pos(self.cfg["core"]["symbol"], 100, 500.0)])  # core = $50k
         E = self.make(fb)
         rec = E.tick()
         self.assertEqual(rec["size_equity"], 50000.0)
@@ -159,7 +159,7 @@ class TestTick(Base):
         self.assertFalse(any(p[0] == "market" for p in fb.placed))  # core within band: no rebalance
 
     def test_core_rebalance_only_outside_band(self):
-        fb = FakeBroker(equity=100000.0, positions=[pos("SPY", 50, 500.0)])  # core 25% -> below 40%
+        fb = FakeBroker(equity=100000.0, positions=[pos(self.cfg["core"]["symbol"], 50, 500.0)])  # core 25% -> below 40%
         E = self.make(fb)
         E.tick()
         core = [p for p in fb.placed if p[0] == "market"]
@@ -238,9 +238,10 @@ class TestTick(Base):
         self.assertNotEqual(rec2["mode"], "REFUSED")
 
     def test_flatten_never_touches_core_or_foreign(self):
-        fb = FakeBroker(positions=[pos("SPY", 100, 500.0), pos("SOXL", 10, 100.0), pos("NVDA", 5, 200.0)])
+        core = self.cfg["core"]["symbol"]
+        fb = FakeBroker(positions=[pos(core, 100, 500.0), pos("SOXL", 10, 100.0), pos("NVDA", 5, 200.0)])
         E = self.make(fb)
-        E.flatten(["SPY", "NVDA", "SOXL"])
+        E.flatten([core, "NVDA", "SOXL"])
         self.assertEqual(fb.flattened, ["SOXL"])
 
 
