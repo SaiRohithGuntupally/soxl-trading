@@ -70,7 +70,8 @@ def bot_live(symbol, positions, key, sec):
 def symbol_return(symbol, start, key, sec):
     """Buy-and-hold % of the symbol from `start` to now (the live benchmark)."""
     try:
-        bars = broker.daily_bars(symbol, key, sec, lookback_days=40)
+        days = (dt.date.today() - dt.date.fromisoformat(start)).days + 10
+        bars = broker.daily_bars(symbol, key, sec, lookback_days=max(40, days))
         bars = [b for b in bars if b["t"][:10] >= start]
         if len(bars) >= 2:
             return bars[-1]["c"] / bars[0]["c"] - 1

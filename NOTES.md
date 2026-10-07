@@ -110,3 +110,58 @@ of a daily summary went unnoticed. No external dead-man's switch, no one-command
 **Validation:** py_compile clean; `fleet_status.py` live run -> STALE (correct); TQQQ SMA200 now
 670.08 vs close 759.62 (regime ok); `install_cron.sh --dry-run` renders 12 lines; backtest.py untouched.
 **Pending on the Pi (human):** `git pull`, `./doctor.sh`, `./install_cron.sh`, set `HEALTHCHECK_URL`.
+
+## 2026-10-06 (later) - fleet-wide correctness audit of the live code path (Mac, human-initiated)
+
+**Scope:** bot.py / broker.py / portfolio.py / notify.py / review.py / tracker.py and all 7 configs, read against
+the 07-03 / 07-06 / 07-07 incidents. Correctness only: no strategy knob, signal or guardrail was changed.
+Nothing was sent to Alpaca except GETs; behaviour was verified with a synthetic no-network tick harness
+(11 scenarios, scratch file, not committed).
+
+**Evidence / defects found:**
+- Naked position after a failed flatten (HIGH). `flatten_symbol` cancels the bracket legs FIRST; if the close
+  then fails (the 07-06 403 pattern) and the exit signal flips back before the next tick, the HOLD branch kept
+  the position with NO stop at all (`_manage_trailing` returned early when no stop order existed; meanrev bots
+  never even looked). Fix: `_ensure_stop` runs on every HOLD; if the position has zero resting orders it re-arms
+  a GTC sell-stop at the level remembered at entry (`state.stop_price`, new) lifted to the chandelier when
+  trailing; if that level is already at/above the price it flattens instead. Skips when any order rests for the
+  symbol (TP leg holding the shares, pending close) and for non-long positions.
+- Phantom P&L when the FILL activity lags (HIGH, the 07-07 latent fragility). `soxl_daily_pnl` saw a stopped-out
+  position as `pnl = -day_start_value` until the activity landed, which can falsely trip the per-symbol kill AND
+  the 15% portfolio breaker for all 7 bots (UPRO alone was 36% of equity). Fix: `broker.todays_fills` reconciles
+  activities against `GET /v2/orders?status=closed&symbols=X` by `filled_at` (ET date) and synthesizes any
+  filled_qty the activities feed has not reported yet at `filled_avg_price`; best-effort, activities stand if the
+  orders call fails. Verified order/activity field names against the live account (read-only).
+- Live ATR was a simple mean of the last 14 TRs; backtest.py/analyze.py use Wilder ATR (MEDIUM). Stops and
+  position sizes therefore differed from what was validated: on 2026-10-06 bars simple vs Wilder = SOXL
+  11.34/11.36, UPRO 3.74/3.70, TQQQ 2.98/2.81, LABU 19.87/19.23, TNA 2.27/2.31, MSTR 9.19/8.69, PLTR 5.42/6.01
+  (up to ~11%). Fix: `broker.atr` is now Wilder and equals `backtest.atr_series(...)[-1]` exactly on synthetic
+  bars. backtest.py itself is untouched, so its numbers are unchanged.
+- Kill-switch re-trip spam (MEDIUM). The kill branch sits before the HALTED short-circuit, so with a realized loss
+  every later tick re-journaled KILL_SWITCH and re-paged Signal (the "11 KILL_SWITCH" signature on 07-07 and the
+  inflated review.py KILL flag the operator is told to lower risk_pct on). Fix: once halted with no position the
+  tick falls through to the quiet HALTED branch; if a position is still open the kill path still re-runs so the
+  flatten is retried every tick (the 07-06 safety property is preserved).
+- `--flatten` re-bought itself (MEDIUM). A manual kill closed the symbol but left state untouched, so the next
+  cron tick (flat + entry_ok) re-entered within 15 min. Fix: `--flatten` now also marks the bot halted for the
+  rest of the ET day (creating today's state with the pre-flatten position value if no tick has run yet).
+- Trailing stop lagging a fast move (LOW/MEDIUM). If the chandelier was already above the price the PATCH is
+  pointless (or rejected) and the exit the backtest takes never happened. Fix: `_manage_trailing` flattens and
+  the tick journals CLOSE_TRAIL; it still never lowers a stop.
+- Guardrail ceilings only in prose (LOW). `load_config` now hard-caps risk_pct at 4.0 and portfolio_max_loss_pct
+  at 15.0 in code, like max_daily_loss_pct already was.
+- review.py counted exits under the long-gone action name CLOSE_TREND_BREAK (trend_closes always 0, quick
+  reversals never detected); tracker.py B&H benchmark fetched 40 days of bars for a window that started in
+  June (wrong baseline); `unrealized_intraday_pl: null` would have crashed a tick. All fixed (LOW).
+
+**Reported, deliberately NOT changed:** signal/EMA/ADX computed on the partial intraday IEX bar (design, matches
+fleet_status); `latest_price` from the thin IEX tape for sizing; a manual position in a bot's symbol is treated
+as the bot's own (including by `--flatten`); kill-switch denominator is whole-account equity incl. the foreign
+AVGO/NVDA/SMCI/VTI/WMT/XLK positions; `get_open_orders` limit=100 is account-wide; chandelier uses current ATR
+while the backtest freezes ATR at entry; alpaca_test.py keeps its own simple-mean ATR (diagnostic only).
+
+**Validation:** py_compile clean (bot, broker, review, tracker); synthetic harness all green (Wilder ATR ==
+backtest, fill reconciliation incl. orders-endpoint failure, caps, naked re-arm + level, no re-arm when a leg
+rests, ratchet never loosens, crossed chandelier -> CLOSE_TRAIL, kill trips once then HALTED and retries flatten
+while a position remains, rollover, --flatten halts, meanrev re-arm); `python3 fleet_status.py` read-only run
+unchanged (STALE verdict, MSTR/PLTR enter-eligible, all gates compute). No orders placed.

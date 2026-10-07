@@ -21,3 +21,6 @@ tracker.log
 heartbeat/
 fleet_status.log
 fleet_status.json
+
+# research data cache (re-fetched from Alpaca on demand)
+research/.cache/

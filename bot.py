@@ -17,7 +17,7 @@ Usage:
   python3 bot.py --dry-run       # one tick, log decision but place NO orders
   python3 bot.py --loop 120      # tick every 120s until killed (local runtime)
   python3 bot.py --status        # print account/position/PnL summary, no trading
-  python3 bot.py --flatten       # close everything now (manual kill)
+  python3 bot.py --flatten       # close this bot's symbol now + halt it for the day (manual kill)
 """
 
 from __future__ import annotations
@@ -64,6 +64,8 @@ DEFAULTS = {
     "portfolio_max_loss_pct": 15.0,   # combined daily loss across all bots -> halt all
 }
 HARD_KILL_CEILING = 10.0  # reviewer may not set max_daily_loss_pct above this
+HARD_RISK_CEILING = 4.0   # user-chosen risk_pct ceiling (OPERATOR.md); enforced in code too
+HARD_PORTFOLIO_CEILING = 15.0  # portfolio_max_loss_pct may never be loosened past this
 
 
 def load_config(path=None) -> dict:
@@ -73,9 +75,13 @@ def load_config(path=None) -> dict:
         with open(path) as fh:
             cfg.update({k: v for k, v in json.load(fh).items()
                         if not k.startswith("_")})
-    # Enforce the kill-switch ceiling no matter what config says.
+    # Enforce the guardrail ceilings no matter what config says.
     if float(cfg["max_daily_loss_pct"]) > HARD_KILL_CEILING:
         cfg["max_daily_loss_pct"] = HARD_KILL_CEILING
+    if float(cfg["risk_pct"]) > HARD_RISK_CEILING:
+        cfg["risk_pct"] = HARD_RISK_CEILING
+    if float(cfg.get("portfolio_max_loss_pct") or 0) > HARD_PORTFOLIO_CEILING:
+        cfg["portfolio_max_loss_pct"] = HARD_PORTFOLIO_CEILING
     return cfg
 
 
@@ -112,6 +118,16 @@ def find_position(positions, symbol):
 
 def has_open_order(orders, symbol):
     return any(o.get("symbol") == symbol for o in orders)
+
+
+def new_day_state(today, equity, mv, pos, prev):
+    """Fresh per-day state. Baseline equity (the bot's capital denominator) and the
+    symbol position value carried in, so P&L is measured from here. trail_hh and
+    the protective stop level persist across days only while still holding."""
+    return {"date": today, "day_start_equity": equity,
+            "soxl_day_start_value": mv, "halted": False, "halt_reason": None,
+            "trail_hh": prev.get("trail_hh") if pos else None,
+            "stop_price": prev.get("stop_price") if pos else None}
 
 
 def soxl_daily_pnl(cfg, today, pos_market_value, day_start_value, key, sec):
@@ -151,12 +167,7 @@ def tick(cfg, dry_run=False, log=print) -> dict:
 
     state = load_state()
     if state.get("date") != today:
-        # New day: baseline equity (the bot's "allocated capital" denominator) and
-        # the SOXL position value we carried in, so P&L is measured from here.
-        # Preserve trail_hh (highest-high since entry) across days while holding.
-        state = {"date": today, "day_start_equity": equity,
-                 "soxl_day_start_value": mv, "halted": False, "halt_reason": None,
-                 "trail_hh": state.get("trail_hh") if pos else None}
+        state = new_day_state(today, equity, mv, pos, state)
 
     day_start = float(state["day_start_equity"])
     soxl_start_val = float(state.get("soxl_day_start_value", 0.0))
@@ -176,7 +187,7 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     if pos:
         rec["qty"] = pos.get("qty")
         rec["soxl_market_value"] = round(mv, 2)
-        rec["unrealized_intraday_pl"] = float(pos.get("unrealized_intraday_pl", 0))
+        rec["unrealized_intraday_pl"] = float(pos.get("unrealized_intraday_pl") or 0)
 
     # --- PORTFOLIO circuit breaker: record this bot's P&L to the shared ledger,
     # then check the COMBINED daily loss across all bots. ---
@@ -189,7 +200,12 @@ def tick(cfg, dry_run=False, log=print) -> dict:
     # Trips on the bot's OWN symbol loss, OR a portfolio-wide breach. Flattens ONLY
     # this bot's symbol — never the rest of the account.
     kill_level = -float(cfg["max_daily_loss_pct"]) / 100.0 * day_start
-    if pnl <= kill_level or port_breach:
+    # Once halted with nothing left to flatten, later ticks fall through to the
+    # quiet HALTED branch instead of re-journaling KILL_SWITCH and re-paging every
+    # 15 min (the realized loss keeps pnl <= kill_level all day). If a position is
+    # still open (an earlier flatten failed) the kill path re-runs so the flatten
+    # is retried every tick until it succeeds.
+    if (pnl <= kill_level or port_breach) and (pos or not state.get("halted")):
         if not dry_run and pos:
             try:
                 # Cancel resting bracket legs, then close — with settle-and-retry.
@@ -278,7 +294,7 @@ def tick(cfg, dry_run=False, log=print) -> dict:
                 broker.flatten_symbol(sym, key, sec)
             except broker.AlpacaError as e:
                 rec["flatten_error"] = str(e)
-        state["trail_hh"] = None
+        state["trail_hh"] = None; state["stop_price"] = None
         rec["action"] = "CLOSE_SIGNAL"
         log(f"exit signal while holding -> close {sym}")
         notify.send(f"🔴 {sym} closed ({exit_reason}). Today P&L ${pnl:+,.0f}")
@@ -308,11 +324,18 @@ def tick(cfg, dry_run=False, log=print) -> dict:
         else:
             rec["action"] = _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log, state)
     elif pos:
-        # Holding with the trend intact -> ratchet the trailing stop up.
-        if cfg.get("trailing") and not dry_run:
-            _manage_trailing(cfg, pos, key, sec, rec, log, state)
+        # Holding with the signal intact. First make sure a protective stop is
+        # actually resting (a flatten that cancelled the bracket legs and then
+        # failed leaves the position naked), then ratchet the trailing stop up.
         rec["action"] = "HOLD"
-        log(f"hold ({cfg['symbol']})")
+        if not dry_run:
+            _ensure_stop(cfg, pos, orders, key, sec, rec, log, state)
+            if cfg.get("trailing") and _manage_trailing(cfg, pos, key, sec, rec, log, state):
+                rec["action"] = "CLOSE_TRAIL"
+                state["trail_hh"] = None; state["stop_price"] = None
+                notify.send(f"🔴 {sym} closed (trailing stop {rec.get('chandelier')} "
+                            f"crossed). Today P&L ${pnl:+,.0f}")
+        log(f"{rec['action'].lower()} ({cfg['symbol']})")
     else:
         rec["action"] = "FLAT_NO_SIGNAL"
         log(f"no action ({rec['action']})")
@@ -335,6 +358,7 @@ def _place(cfg, shares, entry, plan, dry_run, key, sec, rec, log, state) -> str:
     rec["order_id"] = res.get("id")
     rec["take_profit"] = round(tp, 2)
     state["trail_hh"] = entry            # seed trailing high-water mark at entry
+    state["stop_price"] = round(stop, 2)  # remembered so a lost stop leg can be re-armed
     log(f"OPEN: BUY {shares} {cfg['symbol']} stop {stop:.2f} tp {tp:.2f} "
         f"id={res.get('id')}")
     notify.send(f"🟢 {cfg['symbol']} OPEN ({cfg.get('strategy','trend')}) — bought "
@@ -376,9 +400,54 @@ def _near_event(cfg, today: str) -> bool:
     return False
 
 
-def _manage_trailing(cfg, pos, key, sec, rec, log, state):
+def _ensure_stop(cfg, pos, orders, key, sec, rec, log, state):
+    """Re-arm a protective GTC sell-stop if the position has NO resting orders.
+    How a position goes naked: flatten_symbol() cancels the bracket legs first,
+    then the close 403s/fails; if the exit signal then flips back before the next
+    tick, the bot HOLDs with no stop at all. Level = the stop remembered at entry
+    (or entry - stop_atr*ATR if state was lost), lifted to the chandelier when
+    trailing. If that level is already at/above the price the stop would have
+    fired, so flatten instead. Skips if ANY order rests for the symbol (TP leg
+    still holding the shares, pending close) and for non-long positions.
+    Best-effort: must never crash a tick."""
+    sym = cfg["symbol"]
+    try:
+        qty = int(float(pos.get("qty") or 0))
+        if qty <= 0 or has_open_order(orders, sym):
+            return
+        atr_now = broker.atr(broker.daily_bars(sym, key, sec, feed=cfg["feed"]),
+                             int(cfg["atr_len"]))
+        entry = float(pos["avg_entry_price"])
+        price = float(pos.get("current_price") or entry)
+        level = float(state.get("stop_price") or (entry - float(cfg["stop_atr"]) * atr_now))
+        if cfg.get("trailing"):
+            hh = max(float(state.get("trail_hh") or entry), price)
+            level = max(level, hh - float(cfg["chand_atr"]) * atr_now)
+        level = round(level, 2)
+        rec["naked_position"] = True
+        if level >= price:
+            broker.flatten_symbol(sym, key, sec)
+            rec["rearm_stop"] = f"stop {level:.2f} >= price {price:.2f}: flattened"
+            log(f"{sym} had no protective stop and {level:.2f} >= {price:.2f} -> flattened")
+            notify.send(f"🔴 {sym} had NO resting stop; level ${level:.2f} already crossed "
+                        f"(price ${price:.2f}) -> flattened")
+            return
+        res = broker.submit_stop(sym, qty, level, key, sec)
+        state["stop_price"] = level
+        rec["rearm_stop"] = level; rec["rearm_order_id"] = res.get("id")
+        log(f"{sym} had no protective stop -> re-armed GTC stop {qty} @ {level:.2f}")
+        notify.send(f"⚠️ {sym} had NO resting stop (legs gone); re-armed GTC stop "
+                    f"{qty} @ ${level:.2f}")
+    except (broker.AlpacaError, KeyError, ValueError, TypeError) as e:
+        rec["rearm_error"] = str(e)[:160]
+
+
+def _manage_trailing(cfg, pos, key, sec, rec, log, state) -> bool:
     """Ratchet the protective stop up toward a chandelier level (never down).
-    Best-effort: trailing must never crash a tick."""
+    Returns True if the chandelier was already crossed and the position was
+    flattened (the resting stop lagged a fast move; the backtest exits at the
+    chandelier, so a market exit is the faithful equivalent). Best-effort:
+    trailing must never crash a tick."""
     try:
         atr_now = broker.atr(broker.daily_bars(cfg["symbol"], key, sec,
                                                feed=cfg["feed"]), int(cfg["atr_len"]))
@@ -388,16 +457,24 @@ def _manage_trailing(cfg, pos, key, sec, rec, log, state):
         chandelier = hh - float(cfg["chand_atr"]) * atr_now
         so = broker.open_stop_order(cfg["symbol"], key, sec)
         if not so:
-            return
+            return False
         cur_stop = float(so.get("stop_price") or 0)
         rec["trail_hh"] = round(hh, 2)
         rec["chandelier"] = round(chandelier, 2)
         if chandelier > cur_stop + 0.01:        # only ever move the stop UP
+            if chandelier >= price:
+                # Already through the trailing level: a PATCH to a stop above the
+                # market is pointless/rejected; exit now like the backtest would.
+                broker.flatten_symbol(cfg["symbol"], key, sec)
+                log(f"chandelier {chandelier:.2f} >= price {price:.2f} -> flattened")
+                return True
             broker.replace_order(so["id"], key, sec, stop_price=round(chandelier, 2))
+            state["stop_price"] = round(chandelier, 2)
             rec["trail_moved_to"] = round(chandelier, 2)
             log(f"trail stop {cur_stop:.2f} -> {chandelier:.2f}")
     except (broker.AlpacaError, KeyError, ValueError, TypeError) as e:
         rec["trail_error"] = str(e)[:120]
+    return False
 
 
 def cmd_status(cfg):
@@ -436,12 +513,32 @@ def main(argv):
         # Close ONLY the bot's symbol, never the rest of the account.
         key, sec = broker.load_creds()
         positions = broker.get_positions(key, sec)
-        if find_position(positions, cfg["symbol"]):
+        pos = find_position(positions, cfg["symbol"])
+        # Manual kill: also halt this bot for the rest of the ET day. Without
+        # this the next cron tick (<= 15 min later) sees flat + entry_ok and
+        # simply re-buys. Written before the close so the baseline includes the
+        # position value and today's sale is measured correctly.
+        try:
+            clock = broker.get_clock(key, sec)
+            today = clock["timestamp"][:10]
+            state = load_state()
+            if state.get("date") != today:
+                acct = broker.get_account(key, sec)
+                state = new_day_state(today, float(acct["equity"]),
+                                      float(pos["market_value"]) if pos else 0.0, pos, state)
+            state["halted"] = True
+            state["halt_reason"] = "manual --flatten (halted for the day)"
+            state["trail_hh"] = None; state["stop_price"] = None
+            save_state(state)
+        except (broker.AlpacaError, KeyError, ValueError, TypeError) as e:
+            print(f"warning: could not mark halted: {e}", file=sys.stderr)
+        if pos:
             # cancel resting bracket legs, then close — settle-and-retry the
             # held_for_orders race so a manual flatten doesn't 403 out.
             print(broker.flatten_symbol(cfg["symbol"], key, sec))
         else:
             print(f"no {cfg['symbol']} position to close")
+        print(f"{cfg['symbol']} bot halted for the rest of today (manual kill)")
         return 0
 
     if args.loop:

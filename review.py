@@ -56,7 +56,8 @@ def load_journal(path: str = None) -> list[dict]:
 def analyze(rows: list[dict]) -> dict:
     actions = Counter(r.get("action") for r in rows)
     opens = [r for r in rows if r.get("action") in ("OPEN", "DRY_OPEN")]
-    closes = [r for r in rows if r.get("action") == "CLOSE_TREND_BREAK"]
+    CLOSE_ACTIONS = ("CLOSE_SIGNAL", "CLOSE_TRAIL", "CLOSE_TREND_BREAK")  # last = legacy name
+    closes = [r for r in rows if r.get("action") in CLOSE_ACTIONS]
     kills = [r for r in rows if r.get("action") == "KILL_SWITCH"]
 
     # Per-day final SOXL P&L (last record carrying soxl_daily_pnl per date).
@@ -74,7 +75,7 @@ def analyze(rows: list[dict]) -> dict:
     for i, r in enumerate(rows):
         if r.get("action") in ("OPEN",):
             for nxt in rows[i + 1:i + 4]:
-                if nxt.get("action") in ("CLOSE_TREND_BREAK", "KILL_SWITCH"):
+                if nxt.get("action") in CLOSE_ACTIONS + ("KILL_SWITCH",):
                     quick_reversals += 1
                     break
 

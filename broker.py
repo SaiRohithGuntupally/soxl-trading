@@ -98,13 +98,59 @@ def latest_price(symbol, key, sec, feed="iex"):
     return float(j["trade"]["p"])
 
 
+def _et_date(ts: str) -> str:
+    """ET calendar date of an RFC3339 timestamp (orders report UTC, e.g.
+    '2026-07-06T13:45:12.733159Z'). Falls back to the raw date on any parse/tz
+    problem; regular-hours fills (13:30-20:00 UTC) share the date either way."""
+    try:
+        from zoneinfo import ZoneInfo
+        s = ts.replace("Z", "+00:00")
+        if "." in s:                      # trim sub-microsecond digits for fromisoformat
+            head, tail = s.split(".", 1)
+            frac = tail[:6].ljust(6, "0") if tail[0].isdigit() else ""
+            tz = tail.lstrip("0123456789")
+            s = f"{head}.{frac}{tz}" if frac else f"{head}{tz}"
+        d = dt.datetime.fromisoformat(s)
+        return d.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    except Exception:
+        return (ts or "")[:10]
+
+
 def todays_fills(symbol, date, key, sec):
-    """All FILL activities for `symbol` on `date` (YYYY-MM-DD)."""
+    """All FILL activities for `symbol` on `date` (YYYY-MM-DD), reconciled against
+    the order book so the cashflow P&L cannot see a position vanish without its
+    sale: if a closed order for `symbol` shows `filled_at` today but its filled_qty
+    is not (fully) present in the activities feed yet (activities can lag the
+    position/orders endpoints by a tick), the missing quantity is synthesized at
+    the order's filled_avg_price. Without this, a stopped-out position whose FILL
+    activity has not landed yet reads as pnl = -day_start_value, which can falsely
+    trip the symbol kill switch AND the shared portfolio breaker for every bot."""
     acts = api("GET", TRADE_HOST,
                f"/v2/account/activities?activity_types=FILL&date={date}", key, sec)
-    if not isinstance(acts, list):
-        return []
-    return [a for a in acts if a.get("symbol") == symbol]
+    fills = [a for a in acts if a.get("symbol") == symbol] if isinstance(acts, list) else []
+    try:
+        seen = {}
+        for a in fills:
+            oid = a.get("order_id")
+            if oid:
+                seen[oid] = seen.get(oid, 0.0) + float(a.get("qty") or 0)
+        closed = api("GET", TRADE_HOST,
+                     f"/v2/orders?status=closed&symbols={symbol}&limit=500", key, sec)
+        for o in (closed if isinstance(closed, list) else []):
+            if o.get("symbol") != symbol or not o.get("filled_at"):
+                continue
+            if _et_date(o["filled_at"]) != date:
+                continue
+            fq = float(o.get("filled_qty") or 0)
+            px = float(o.get("filled_avg_price") or 0)
+            missing = fq - seen.get(o.get("id"), 0.0)
+            if missing > 1e-9 and px > 0:
+                fills.append({"symbol": symbol, "side": o.get("side", ""), "qty": str(missing),
+                              "price": str(px), "order_id": o.get("id"),
+                              "transaction_time": o["filled_at"], "synthetic": True})
+    except (AlpacaError, ValueError, TypeError, KeyError):
+        pass                              # reconciliation is best-effort; activities stand
+    return fills
 
 
 def all_fills(symbol, key, sec, after="2026-06-01"):
@@ -200,9 +246,22 @@ def submit_bracket(symbol, qty, entry_stop, take_profit, key, sec, side="buy"):
     return api("POST", TRADE_HOST, "/v2/orders", key, sec, body=order)
 
 
+def submit_stop(symbol, qty, stop_price, key, sec):
+    """Plain GTC protective sell-stop. Used only to re-arm a position that has
+    lost its bracket stop leg (e.g. legs cancelled by a flatten that then failed)."""
+    order = {"symbol": symbol, "qty": str(int(qty)), "side": "sell", "type": "stop",
+             "time_in_force": "gtc", "stop_price": str(round(float(stop_price), 2))}
+    return api("POST", TRADE_HOST, "/v2/orders", key, sec, body=order)
+
+
 # ---- indicators -----------------------------------------------------------
 
 def atr(bars: list[dict], period: int = 14) -> float:
+    """Latest Wilder ATR, matching backtest.atr_series (seed = mean of the first
+    `period` true ranges after bar 0, then Wilder smoothing). Previously a simple
+    mean of the last `period` TRs, which diverged from the validated backtest by
+    up to ~10% on live bars (PLTR 5.42 vs 6.01 on 2026-10-06) and so mis-sized
+    positions and mis-placed stops relative to what was backtested."""
     trs, prev_close = [], None
     for b in bars:
         h, l, c = b["h"], b["l"], b["c"]
@@ -210,9 +269,12 @@ def atr(bars: list[dict], period: int = 14) -> float:
             h - l, abs(h - prev_close), abs(l - prev_close))
         trs.append(tr)
         prev_close = c
-    if len(trs) < period:
-        raise AlpacaError(f"need >= {period} bars for ATR, got {len(trs)}")
-    return sum(trs[-period:]) / period
+    if len(trs) <= period:
+        raise AlpacaError(f"need > {period} bars for ATR, got {len(trs)}")
+    a = sum(trs[1:period + 1]) / period
+    for t in trs[period + 1:]:
+        a = (a * (period - 1) + t) / period
+    return a
 
 
 def adx(bars: list[dict], period: int = 14) -> float | None:
