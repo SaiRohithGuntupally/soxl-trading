@@ -1,0 +1,32 @@
+{
+  "_what": "v2 fleet: 5 trend bots sized off NON-CORE capital + a passive SPY core. Decisions once per day on the near-complete bar (last 20 min of the session); risk management every tick. Validated as variant D in research/PROFIT-REVIEW-2026-10-06.md; run `python3 fleet.py backtest` to reproduce.",
+  "feed": "iex",
+  "decision_window_min": 20,
+  "account": {
+    "max_gross_pct": 100.0,
+    "portfolio_max_loss_pct": 15.0,
+    "max_daily_loss_pct": 10.0,
+    "max_position_pct": 50.0
+  },
+  "core": {
+    "symbol": "SPY",
+    "fraction": 0.5,
+    "rebalance_band": 0.10,
+    "_note": "Beta, not alpha: this is simply being half long the market. Band is in fraction-of-equity points: rebalance only when the core drifts outside 40%..60% of equity. The research variant bought once and never rebalanced; a wide band is the closest live equivalent that still handles deposits and large drift."
+  },
+  "defaults": {
+    "strategy": "trend", "ema_len": 20, "atr_len": 14, "chop_filter": true, "adx_min": 25.0,
+    "stop_atr": 1.5, "trailing": true, "chand_atr": 3.0, "trail_tp_R": 8.0, "tp_R": 2.0,
+    "mkt_confirm": true, "mkt_symbol": "SPY", "mkt_ema": 20,
+    "event_block_days": 0, "event_dates": [],
+    "_event_note": "Event gating defaults OFF in v2: the 2026-10-06 review found the FOMC/CPI gate fitted after the fact and flat in the tuning window. Set event_block_days > 0 and populate event_dates to re-enable."
+  },
+  "bots": [
+    {"symbol": "SOXL", "underlying": "SOXX", "risk_pct": 4.0},
+    {"symbol": "UPRO", "underlying": "SPY",  "risk_pct": 2.0, "mkt_confirm": false},
+    {"symbol": "MSTR", "underlying": "MSTR", "risk_pct": 2.0},
+    {"symbol": "PLTR", "underlying": "PLTR", "risk_pct": 2.0},
+    {"symbol": "TNA",  "underlying": "IWM",  "risk_pct": 2.0}
+  ],
+  "_guardrails": "Hard-capped in code regardless of this file: max_daily_loss_pct <= 10, portfolio_max_loss_pct <= 15, risk_pct <= 4 (SOXL) / <= 2 (others), max_gross_pct <= 100. Bots only ever trade their own symbol; the core only ever trades its symbol; nothing else in the account is touched."
+}

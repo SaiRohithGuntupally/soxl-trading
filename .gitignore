@@ -24,3 +24,9 @@ fleet_status.json
 
 # research data cache (re-fetched from Alpaca on demand)
 research/.cache/
+
+# v2 runtime (per machine)
+v2/fleet.db
+v2/fleet.db-journal
+v2/heartbeat/
+v2/*.log

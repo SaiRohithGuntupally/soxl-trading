@@ -254,6 +254,14 @@ def submit_stop(symbol, qty, stop_price, key, sec):
     return api("POST", TRADE_HOST, "/v2/orders", key, sec, body=order)
 
 
+def submit_market(symbol, qty, side, key, sec, tif="day"):
+    """Plain market order (no bracket). Used by the v2 core sleeve to buy/trim the
+    passive index holding; the core carries no stop by design."""
+    order = {"symbol": symbol, "qty": str(int(qty)), "side": side, "type": "market",
+             "time_in_force": tif}
+    return api("POST", TRADE_HOST, "/v2/orders", key, sec, body=order)
+
+
 # ---- indicators -----------------------------------------------------------
 
 def atr(bars: list[dict], period: int = 14) -> float:
