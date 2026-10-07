@@ -143,8 +143,12 @@ class TestTick(Base):
         self.assertIn("market", kinds)                        # core buy (no SPY held)
         core = [p for p in fb.placed if p[0] == "market"][0]
         self.assertEqual(core[1], self.cfg["core"]["symbol"]); self.assertEqual(core[3], "buy")
-        # non-core sizing: core not yet held, so size_equity == equity this first time
+        # day one: the core is not held yet but its target capital is RESERVED, so the
+        # bots size off equity * (1 - fraction); bots + core never exceed 100% gross
         self.assertEqual(rec["bots"]["SOXL"]["action"], "OPEN")
+        self.assertEqual(rec["size_equity"], 100000.0 * (1 - self.cfg["core"]["fraction"]))
+        bot_notional = sum(p[2] * 100.0 for p in fb.placed if p[0] == "bracket")   # fake bars close ~ $230
+        self.assertLessEqual(bot_notional, 100000.0 * (1 - self.cfg["core"]["fraction"]) + 1)
         # second tick same day: already decided -> no new decision
         rec2 = E.tick()
         self.assertEqual(rec2["mode"], "MANAGE")

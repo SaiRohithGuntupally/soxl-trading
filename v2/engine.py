@@ -358,8 +358,13 @@ class Engine:
         orders = self.b.get_open_orders(self.key, self.sec)
         core_sym = cfg["core"]["symbol"]
         core_pos = self._pos(positions, core_sym)
-        core_mv = float(core_pos["market_value"]) if core_pos and float(cfg["core"]["fraction"]) > 0 else 0.0
-        size_equity = max(0.0, equity - core_mv)
+        core_frac = float(cfg["core"]["fraction"])
+        core_mv = float(core_pos["market_value"]) if core_pos and core_frac > 0 else 0.0
+        # Reserve the core's TARGET capital even before the core is bought (day one, or
+        # after a top-up is due): otherwise the bots size off the whole account and the
+        # core buy in the same tick pushes gross past 100% onto margin.
+        core_reserved = max(core_mv, equity * core_frac)
+        size_equity = max(0.0, equity - core_reserved)
         bot_pos = {s: self._pos(positions, s) for s in self.symbols}
         bots_mv = sum(float(p["market_value"]) for p in bot_pos.values() if p)
 
