@@ -4,6 +4,7 @@
 # bot per OPERATOR.md, then commit & push. Trading ticks are handled by the
 # dedicated run_tick.sh / run_bot.sh crons; this is the review/edit cycle.
 cd "$(dirname "$0")" || exit 1
+[ -f v2/ACTIVE ] && exit 0   # v2 owns the account; see v2/ACTIVE
 . ./heartbeat.sh
 ts="$(date -u +%FT%TZ)"
 export PATH="$HOME/.local/bin:$PATH"

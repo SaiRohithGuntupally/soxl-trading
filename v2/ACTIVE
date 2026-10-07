@@ -1,0 +1,3 @@
+v2 is the live fleet as of 2026-10-06. While this file exists, every v1 run script
+(run_tick.sh, run_bot.sh, operator.sh) exits immediately on ANY host, so a revived
+Raspberry Pi pulling this repo cannot trade the same symbols as v2. Delete to re-enable v1.

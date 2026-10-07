@@ -30,3 +30,7 @@ v2/fleet.db
 v2/fleet.db-journal
 v2/heartbeat/
 v2/*.log
+v2/logs/
+v2/review.json
+v2/operator.log
+v2/logs/

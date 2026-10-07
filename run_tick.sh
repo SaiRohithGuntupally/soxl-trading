@@ -2,6 +2,7 @@
 # Stage 1 — one trading tick on the Pi. Cron this on weekdays; bot.py self-gates
 # on the real US market clock, so ticks outside market hours just no-op.
 cd "$(dirname "$0")" || exit 1
+[ -f v2/ACTIVE ] && exit 0   # v2 owns the account; see v2/ACTIVE
 . ./heartbeat.sh
 # Pick up any strategy edits the operator pushed.
 git pull --rebase --quiet origin main 2>/dev/null || true

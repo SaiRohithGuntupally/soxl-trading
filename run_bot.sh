@@ -2,6 +2,7 @@
 # Generic multi-bot tick: run_bot.sh <path/to/config.json>
 # Pulls latest strategy, runs one tick for that bot, logs next to its config.
 cd "$(dirname "$0")" || exit 1
+[ -f v2/ACTIVE ] && exit 0   # v2 owns the account; see v2/ACTIVE
 CFG="${1:?usage: run_bot.sh <config.json>}"
 . ./heartbeat.sh
 git pull --rebase --quiet origin main 2>/dev/null || true
